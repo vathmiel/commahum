@@ -510,8 +510,19 @@ eval/                         the frozen corpus and the recorded baseline
 tests/                        unit tests (stdlib unittest)
 vendor/pi/                    pi itself, pinned (see "The model, through pi")
 vendor/humanizer-ru/          the style rules (see "Style policy: humanizer-ru")
+LICENSE                       MIT, for this project's own code
 spikes/001-codex-vendor/      record of the removed Codex adapter (historical)
 ```
+
+## License
+
+This project's own code is MIT — see [LICENSE](LICENSE). What it carries keeps its
+own terms, and each notice travels with the copy: pi is MIT (Mario Zechner,
+`vendor/pi/LICENSE.pi`), the humanizer-ru skill is MIT (`vendor/humanizer-ru/
+LICENSE.humanizer-ru`), and the npm packages inlined inside the vendored pi keep
+theirs under `vendor/pi/node_modules/`. An earlier revision vendored the Hermes
+agent layer as well; that copy carried its MIT license (`spikes/001-codex-vendor/
+LICENSE.hermes`) and is no longer in the tree, though it stays in the history.
 
 ## Development
 

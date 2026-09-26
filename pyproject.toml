@@ -7,6 +7,7 @@ name = "commahum"
 version = "0.1.0"
 description = "Stylistic rewriting of comments in Nix sources that never touches non-comment bytes"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
   "tree-sitter==0.25.2",
@@ -14,9 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# What the vendored humanizer-ru scanner needs (tools/style_report.py). The
-# rewriting itself does not: src/commahum/bans.py reads the ban table with ast,
-# so the package imports none of the skill's code.
+# What the vendored humanizer-ru scanner needs (`commahum report` and
+# `commahum measure`). A plain rewrite does not: src/commahum/bans.py reads the
+# ban table with ast, so the package imports none of the skill's code.
 style = [
   "razdel",
   "pymorphy3",
@@ -30,4 +31,4 @@ commahum = "commahum.cli:main"
 packages = ["src/commahum"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/commahum", "tests", "eval", "README.md"]
+include = ["src/commahum", "tests", "eval", "README.md", "LICENSE"]
