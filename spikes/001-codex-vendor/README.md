@@ -1,62 +1,40 @@
-# Spike 001: Codex path without the Hermes package
+# Spike 001: narrow Codex-subscription adapter
 
-Question: can the Codex OAuth + text request path from Hermes Agent run as a
-local source snapshot without installing Hermes Agent as a dependency?
+Question: can the Codex text-request path be made small enough to use without installing Hermes Agent or vendoring its broad auxiliary-client dependency closure?
 
-## Source and rights
+## Current design
 
-Upstream: https://github.com/NousResearch/hermes-agent
-Source revision: `59004a62356f3a4697ab0fe8ad5086d2b405e2a6` (installed Nix build).
-Files under `vendor/` are unmodified copies from that revision. See
-`manifest.json` for SHA-256 of each file and `LICENSE.hermes` for the upstream
-MIT license and attribution. The snapshot was captured from modules used by a
-single successful text request, plus two lazily loaded modules (`tools/`).
-It is not yet a complete dependency closure for every error/authentication path.
+`codex_adapter.py` implements only the path this project needs:
 
-## Reproduction
+1. Read the existing `openai-codex` OAuth grant from `$HERMES_HOME/auth.json` (default `~/.hermes/auth.json`).
+2. When the JWT is close to expiry, refresh it and atomically update the same auth file.
+3. Send a text-only request to the Codex Responses endpoint using the OpenAI SDK. The endpoint requires `stream=true` and typed input items.
+4. Return text deltas only after `response.completed`; failed or truncated streams are rejected.
 
-The probe (`probe.py`) uses the interpreter from the installed Hermes build to
-locate its source files and create the snapshot. It sends only a harmless `ping`
-request; never log access or refresh tokens.
+The adapter identifies itself as `commahum` and forwards the ChatGPT account and residency headers encoded in the access JWT. It uses the same adjacent `.lock` naming and POSIX `flock` convention as Hermes when refreshing rotating credentials.
 
-1. With an already logged-in Hermes Codex session, run
-   `<hermes-python> probe.py capture` to create `vendor/`.
-2. Run `<hermes-python> probe.py augment` to add modules first encountered by
-   the isolated import guard. This is deliberately bounded and not a static
-   dependency analysis.
-3. Create a clean Python virtual environment (without the Hermes distribution).
-   Install `openai`, `httpx`, `ruamel.yaml`, `python-dotenv`, `requests`, and
-   `PyYAML` (pip installs their transitive dependencies).
-4. From this directory, run `PYTHONPATH=vendor .venv/bin/python smoke.py missing-auth`
-   and `PYTHONPATH=vendor .venv/bin/python smoke.py success`.
-   The second command sends a small real Codex request and requires an existing
-   Hermes OAuth login.
+The implementation is deliberately a narrow port/adaptation, not a runtime import of Hermes and not a wholesale copy of its files. `manifest.json` pins the upstream revision and identifies the source modules/functions used as references. The upstream MIT notice is retained in `LICENSE.hermes`.
 
-## Observed results
+## Verification
 
-- Native Hermes client resolved and returned `OK` to an exact-output request.
-- Isolated probe returned `OK` after copying 117 Python modules (3,279,651 bytes).
-  Import guard confirmed no Hermes-owned module came from the installed build.
-- A separate clean venv without the `hermes-agent` distribution also returned
-  `OK` via the vendored files and existing Hermes OAuth login.
-- With a fake `HOME` and `HERMES_HOME`, client resolution returned `(None, None)`
-  rather than silently switching providers.
-- The clean venv probe used Python 3.14, `openai==3.19.2` and
-  `ruamel.yaml==0.19.1`; the source build had `openai==2.24.0` and
-  `ruamel.yaml==0.18.16`. Compatibility outside the tested path is unknown.
+The Python unit tests use fake Codex Responses events and fake OAuth responses, so they make no network calls. They cover typed request construction, identity headers, refusing incomplete/failed output, token refresh rotation, preserving unrelated auth-store data, missing credentials, HTTP 401/429 handling, ambiguous transport/status failures, malformed refresh responses, write failure after rotation, and concurrent refresh callers across threads and processes. Before POSTing, the adapter atomically persists a one-way fingerprint of the current refresh token; it refuses to replay that token after an uncertain response or a failed auth-store write. An accepted new token pair replaces the marker.
+
+With a clean virtual environment, install `requirements.txt`, then run:
+
+```sh
+python -m unittest -v test_codex_adapter
+python smoke.py missing-auth
+python smoke.py success
+```
+
+`success` sends one small live request and needs an existing Hermes Codex OAuth login. The narrow adapter has also been exercised from a venv where the `hermes-agent` distribution is absent.
+
+## Observed result
+
+The first working probe dynamically copied 117 Python modules (about 3.3 MB) just to call one text request through `agent.auxiliary_client`. That snapshot is no longer needed: the current direct adapter is about 11 KB and depends at runtime only on the OpenAI SDK, `httpx`, and the existing auth file. A direct non-streaming call was rejected by Codex; a typed `stream=true` call completed successfully.
 
 ## Verdict: PARTIAL
 
-Independent importing and a real successful Codex request are demonstrated.
-The current snapshot is too broad for production (it includes the 428 KB
-multi-provider `agent/auxiliary_client.py`). A successful path does not prove
-refresh-token handling, fresh login, 401/429 recovery, concurrency, or clean
-installation on other Python versions. The copied modules still expect Hermes'
-auth-store layout at runtime; the package is absent, but the user's existing
-Hermes OAuth credentials were used for the successful call.
+The slim request path and a real subscription request work without the Hermes package. Unit tests verify atomic token rotation, including a race between separate processes; explicit 401/429 responses leave stored credentials unchanged. Before any refresh POST, the adapter persists only a hash of the current refresh token. Uncertain transport failures, unexpected HTTP statuses, malformed 200 responses, or a failed auth-store write keep that guard in place, preventing this adapter from replaying the token. A new grant can resume operation; other clients that ignore this adapter-specific marker could still try the old token, so re-authenticate with Hermes before using another client. Initial sign-in remains outside this adapter. It currently targets POSIX systems because it shares the auth store's `flock` lock.
 
-Next: statically identify the smaller function-level Codex slice, transfer
-its complete source and third-party dependencies at one pinned revision, then
-exercise login/refresh/error paths in a genuinely isolated test environment.
-Keep the transfer script/manifest and source license in the project so an
-update cannot silently mix revisions.
+Next: move the small adapter from the spike folder into the project package when the project layout is established.
