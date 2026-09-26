@@ -88,6 +88,8 @@ the parser rather than asserted.
 - [x] diff rendering, lossless for files that are not valid UTF-8
 - [x] one request per file, numbered in and out, one retry per failed comment
 - [x] CLI, showing the diff by default and writing only with `--write`
+- [x] the CLI names the request target and reports progress per file, with
+      `--quiet` dropping both
 - [x] the vendored provider layer imports and resolves providers on its own,
       guarded by `tests/test_vendor_tree.py`
 - [x] any of its providers can drive the rewriting: `--provider deepseek` asks
@@ -99,6 +101,7 @@ the parser rather than asserted.
 .venv/bin/commahum path/to/file.nix       # show the diff, write nothing
 .venv/bin/commahum --write path/or/dir    # apply it
 .venv/bin/commahum --provider deepseek path/to/file.nix   # ask another provider
+.venv/bin/commahum --quiet path/or/dir    # no progress, just the diff and the summary
 ```
 
 Directories are walked for `*.nix`. The model call goes through the Codex
@@ -106,6 +109,24 @@ subscription adapter ported in `src/commahum/codex_adapter.py` (provenance in
 `spikes/001-codex-vendor/`); `--model` overrides the model. With `--provider`,
 the call goes through the vendored Hermes layer instead — the adapter is not
 involved at all then.
+
+A run says where each request goes before it waits for it, so a directory that
+takes minutes is not silent:
+
+```sh
+$ commahum --provider deepseek /etc/nixos/hosts/deep-thought/generations.nix
+hosts/deep-thought/generations.nix: asking deepseek · deepseek-flash
+hosts/deep-thought/generations.nix: 16 rewritten, 1 skipped, 0 kept
+1 files, 16 comments rewritten, 1 skipped, 0 kept, 1 requests
+--- a/hosts/deep-thought/generations.nix
++++ b/hosts/deep-thought/generations.nix
+@@ -1,5 +1,5 @@
+-# Два ограничения поколений этого хоста остаются рядом: предел для ESP
++# Два ограничения поколений этого хоста стоят рядом: предел для ESP
+```
+
+Progress and the summary go to stderr, the diff to stdout, so redirecting stdout
+still yields nothing but the patch.
 
 ## Provider integrations
 

@@ -42,6 +42,8 @@ def main(argv=None, *, generate=None) -> int:
             failed = True
             continue
         source = path.read_bytes()
+        if not arguments.quiet:
+            print(f"{_display_name(path)}: {_progress_note(generate)}", file=sys.stderr)
         try:
             result = rewrite_source(source, generate)
         except Exception as error:  # noqa: BLE001 - one bad file must not stop the rest
@@ -87,6 +89,7 @@ def codex_generator(model: str = DEFAULT_MODEL):
     def generate(prompt: str) -> str:
         return client.complete(prompt, instructions=INSTRUCTIONS)
 
+    generate.description = f"Codex subscription · {model}"  # type: ignore[attr-defined]
     return generate
 
 
@@ -95,6 +98,17 @@ def _generator_for(arguments):
     if arguments.provider:
         return provider_generator(arguments.provider, arguments.model)
     return codex_generator(arguments.model or DEFAULT_MODEL)
+
+
+def _progress_note(generate) -> str:
+    """What is about to happen to this file, in the terms the run was asked in.
+
+    A generator that names its target (``deepseek · deepseek-flash``) says so; one
+    that does not still gets a line, because a run over a directory is otherwise
+    silent while a request is in flight.
+    """
+    target = getattr(generate, "description", None)
+    return f"asking {target}" if target else "rewriting"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -130,6 +144,11 @@ def _build_parser() -> argparse.ArgumentParser:
             "ask a provider from the vendored Hermes layer instead of the Codex "
             "subscription, e.g. deepseek, openrouter, nous"
         ),
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="print neither the request target nor the per-file progress, only the diff and the summary",
     )
     return parser
 

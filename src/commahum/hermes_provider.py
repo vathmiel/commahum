@@ -79,6 +79,10 @@ def provider_generator(
     ``model`` is passed through to the provider layer; ``None`` lets the provider
     supply its own default. A client that resolves to no model at all is refused
     here rather than sent to the endpoint as an empty name.
+
+    The callable carries ``description`` — ``deepseek · deepseek-flash`` — so the
+    command line can say where the request is going instead of leaving the run
+    silent while it waits.
     """
     resolver = resolve or resolve_provider_client
     client, resolved = resolver(provider, model)
@@ -103,4 +107,5 @@ def provider_generator(
             raise RuntimeError(f"{provider}: the model returned no text")
         return content
 
+    generate.description = f"{provider} · {chosen}"  # type: ignore[attr-defined]
     return generate

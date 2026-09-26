@@ -15,7 +15,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from commahum.cli import main
+from commahum.cli import codex_generator, main
 from commahum.codex_adapter import DEFAULT_MODEL
 
 
@@ -197,6 +197,46 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(seen, [DEFAULT_MODEL])
+
+    def test_reports_where_the_request_goes(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        generator = FakeGenerator("[[1]]\nновое\n")
+        generator.description = "deepseek · deepseek-flash"
+
+        code, _, err = self.run_cli([str(path)], generator)
+
+        self.assertEqual(code, 0)
+        self.assertIn("home.nix: asking deepseek · deepseek-flash", err)
+
+    def test_a_generator_without_a_named_target_still_reports_progress(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        generator = FakeGenerator("[[1]]\nновое\n")
+
+        code, _, err = self.run_cli([str(path)], generator)
+
+        self.assertEqual(code, 0)
+        self.assertIn("home.nix: rewriting", err)
+
+    def test_quiet_silences_progress_but_keeps_the_diff_and_the_report(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        generator = FakeGenerator("[[1]]\nновое\n")
+        generator.description = "deepseek · deepseek-flash"
+
+        code, out, err = self.run_cli(["--quiet", str(path)], generator)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("asking", err)
+        self.assertNotIn("rewriting", err)
+        self.assertIn("1 rewritten", err)
+        self.assertIn("+# новое", out)
+
+    def test_the_codex_generator_names_its_target(self) -> None:
+        with patch("commahum.codex_adapter.CodexSubscriptionClient"), patch(
+            "commahum.codex_adapter.HermesTokenStore"
+        ):
+            generate = codex_generator("gpt-5.5")
+
+        self.assertEqual(generate.description, "Codex subscription · gpt-5.5")
 
 
 if __name__ == "__main__":

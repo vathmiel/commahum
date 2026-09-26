@@ -67,6 +67,12 @@ class ProviderGeneratorTests(unittest.TestCase):
 
         self.assertEqual(client.calls[0]["model"], "deepseek-v4-pro")
 
+    def test_the_generator_says_which_provider_and_model_it_asks(self) -> None:
+        client = FakeClient()
+        generate = provider_generator("deepseek", resolve=resolver(client, "deepseek-flash"))
+
+        self.assertEqual(generate.description, "deepseek · deepseek-flash")
+
     def test_a_provider_without_a_client_is_refused(self) -> None:
         with self.assertRaises(RuntimeError) as caught:
             provider_generator("deepseek", resolve=lambda provider, model: (None, None))
