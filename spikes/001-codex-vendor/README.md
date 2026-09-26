@@ -48,3 +48,7 @@ The snapshot has since been **restored and moved to `vendor/hermes/`**. Dropping
 ## Verdict: PARTIAL
 
 The slim request path and a real subscription request work without the Hermes package. Unit tests verify atomic token rotation, including a race between separate processes; explicit 401/429 responses leave stored credentials unchanged. Before any refresh POST, the adapter persists only a hash of the current refresh token. Uncertain transport failures, unexpected HTTP statuses, malformed 200 responses, or a failed auth-store write keep that guard in place, preventing this adapter from replaying the token. A new grant can resume operation; other clients that ignore this adapter-specific marker could still try the old token, so re-authenticate with Hermes before using another client. Initial sign-in remains outside this adapter. It currently targets POSIX systems because it shares the auth store's `flock` lock.
+
+## Update: the decision this record describes was reversed
+
+The adapter, its tests, its smoke script, `vendor/hermes/` and `tools/closure_probe.py` have since been removed from the project. The model call now goes through pi — vendored in `vendor/pi/`, described under "The model, through pi" in the root README — which brings the provider catalogs, the credentials and the subscription OAuth with it. Neither a hand-vendored provider layer nor an adapter of our own is needed for that. The commands above name files that no longer exist; `git log` has them.

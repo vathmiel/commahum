@@ -45,6 +45,19 @@ class BuildRequestTests(unittest.TestCase):
         self.assertIn("[[1]]\nпервый", request)
         self.assertIn("[[2]]\nвторой", request)
 
+    def test_the_skill_opening_comes_first_and_on_the_same_line(self) -> None:
+        """pi reads the skill name up to the first space, so the space is load-bearing."""
+        request = build_request([(1, "первый".encode())], invocation="/skill:humanizer-ru")
+
+        self.assertTrue(request.startswith("/skill:humanizer-ru Комментарии:"), request[:60])
+        self.assertNotIn("/skill:humanizer-ru\n", request)
+
+    def test_without_an_invocation_the_payload_is_just_the_payload(self) -> None:
+        request = build_request([(1, "первый".encode())], invocation=None)
+
+        self.assertTrue(request.startswith("Комментарии:"))
+        self.assertNotIn("/skill:", request)
+
     def test_never_includes_code_or_comment_markers(self) -> None:
         source = (
             "# TODO: починить сборку\n"

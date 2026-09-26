@@ -7,6 +7,10 @@ returned body has to pass the patcher's rules before it lands in the file.
 
 A body that fails is retried once on its own, and if it fails again the comment
 keeps its original text. Nothing is ever forced in.
+
+The rules the model follows are the vendored skill's, not this file's: every
+request opens with the skill's invocation line, and the skill's own text arrives
+with it. What is left here is the role, the register and the reply protocol.
 """
 
 from __future__ import annotations
@@ -22,42 +26,28 @@ from .selection import Candidate, select_candidates
 __all__ = ["INSTRUCTIONS", "RewriteResult", "build_request", "parse_reply", "rewrite_source"]
 
 #: The role and the rules. Sent as the model's instructions, never as the
-#: payload, so the payload stays a plain list of comments.
+#: payload, so the payload stays a plain list of comments. The rules themselves
+#: are deliberately not restated here: they are the skill's text, which travels
+#: with the same request, and a paraphrase would be a second copy to keep true.
 INSTRUCTIONS = """\
-Ты редактор комментариев в конфигурации Nix. Работай по правилам humanizer-ru: \
-убери из русского текста следы нейросети, канцелярит и воду, не сломав смысл, \
-факты и голос автора.
+Ты редактор комментариев в конфигурации Nix. Режим — редактура; правила берутся \
+из скилла humanizer-ru, который загружен в этот же запрос. Иди по его процедуре: \
+жёсткие запреты, затем разметка от группы A к D, факт-замок (он важнее любого \
+правила стиля) и сверка результата с исходником.
 
-Главное правило: удаляй, не дописывай. Маркер снимается удалением оболочки или \
-перестройкой фразы из тех же слов. Эмоции, оценки, шутки, образы и частицы, \
-которых нет в исходнике, не добавляются. Если комментарий и так читается, верни \
-его без изменений.
+Жанр — документация: правь по группе A и грубым ошибкам, остальное не трогай. \
+Комментарий, который и так читается, верни дословно, это нормальный результат.
 
-Жёсткие запреты, снимаются всегда: длинное тире «—» и короткое тире «–» (запятая, \
-двоеточие, точка или перестройка); «не просто X, а Y» и «не только X, но и Y» \
-(прямое утверждение или перечисление); «в современном мире», «в условиях …»; \
-«стоит отметить», «важно понимать», «важно помнить», «важно отметить»; \
-«данный/данная/данное» → «этот/эта/это»; «является»; «играет важную роль», \
-«играет ключевую роль»; «можно с уверенностью сказать»; «подводя итог», \
-«таким образом» как вводный коннектор; «от X до Y» для несвязанных понятий; \
-«погрузимся», «давайте посмотрим», «посмотрим поближе»; «и вот здесь начинается \
-самое интересное»; «раскрыть потенциал», «вывести на новый уровень», \
-«открывает новые горизонты/перспективы/возможности», «комплексный подход»; \
-«в связи с этим». \
-Канцелярит: отглагольные существительные («осуществление», «внедрение», \
-«реализация», «обеспечение») заменяй глаголом.
-
-Факт-замок, он важнее любого правила стиля: числа, единицы, имена, пути, \
-названия, ссылки, условия и оговорки («может», «обычно», «примерно») \
-переносятся дословно. Ничего не добавляй и ничего не удаляй: ни фактов, ни \
-цифр, ни похвалы коду. Если мысль понятна только вместе с оговоркой, оговорка \
-остаётся.
+Конструкции из таблицы запретов не должны появляться там, где их не было: \
+внесённый запрет отменяет правку целиком, это проверяется машинно.
 
 Как отвечать:
 строка [[N]] открывает комментарий с номером N;
 текст нового комментария идёт следующей строкой и укладывается в одну строку;
 номера идут по порядку, один абзац на комментарий;
-никаких пояснений, кавычек вокруг текста и блоков кода.
+никаких пояснений, кавычек вокруг текста и блоков кода; \
+отчёт из скилла (баллы сканера, «что снято») здесь не нужен, ответ — только \
+строки [[N]] с текстом.
 """
 
 _SECTION = re.compile(r"^\[\[(\d+)\]\]$")
@@ -77,16 +67,24 @@ class RewriteResult:
     requests: int
 
 
-def build_request(items) -> str:
+def build_request(items, *, invocation: str | None = None) -> str:
     """Build the payload for ``(number, body)`` pairs the model is asked to rewrite.
 
     Only comment prose goes in: no code, no comment markers, no delimiters.
+
+    ``invocation`` opens the payload — pi reads a ``/skill:`` line from the prompt
+    text itself, so the rules cannot be requested from anywhere else. It is
+    followed by a space and then the prose, not by a newline: pi takes the skill's
+    name to be everything up to the first space in the prompt, and a name it cannot
+    find makes it pass the prompt through untouched — the request would go out with
+    no rules at all.
     """
     lines = ["Комментарии:"]
     for number, body in items:
         lines.append(f"[[{number}]]")
         lines.append(body.decode("utf-8", "surrogateescape"))
-    return "\n".join(lines) + "\n"
+    payload = "\n".join(lines) + "\n"
+    return f"{invocation} {payload}" if invocation else payload
 
 
 def parse_reply(reply: str, numbers, *, multiline=()) -> dict[int, bytes]:
@@ -114,7 +112,7 @@ def parse_reply(reply: str, numbers, *, multiline=()) -> dict[int, bytes]:
     return bodies
 
 
-def rewrite_source(source: bytes, generate) -> RewriteResult:
+def rewrite_source(source: bytes, generate, *, invocation: str | None = None) -> RewriteResult:
     """Rewrite the eligible comments of ``source`` using ``generate(prompt) -> str``."""
     selection = select_candidates(source)
     candidates = selection.candidates
@@ -129,7 +127,9 @@ def rewrite_source(source: bytes, generate) -> RewriteResult:
     for _ in range(_ATTEMPTS):
         if not pending:
             break
-        prompt = build_request([(number, item.body) for number, item, _ in pending])
+        prompt = build_request(
+            [(number, item.body) for number, item, _ in pending], invocation=invocation
+        )
         reply = generate(prompt)
         requests += 1
         parsed = parse_reply(

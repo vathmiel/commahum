@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from commahum.bans import hard_bans, introduced_bans, markers_path
 from commahum.rewrite import INSTRUCTIONS
+from commahum.skill import vendored_skill
 
 
 class VendoredRulesTests(unittest.TestCase):
@@ -69,8 +70,14 @@ class IntroducedBansTests(unittest.TestCase):
 
 
 class InstructionsTests(unittest.TestCase):
-    """The prompt is a promise to follow the vendored rules, so it is checked
-    against them: every ban the skill lists is named in the instructions."""
+    """The rules have one copy, and it is the skill's.
+
+    The instructions sent with a request carry the role, the genre and the reply
+    protocol; they do not restate the ban table or the procedure, because a second
+    copy would be a copy to keep true. What the model is held to comes from the
+    skill's own text, which travels with the request, and from the guard, which
+    reads the skill's machine-readable table.
+    """
 
     #: Vendored ban name -> the phrase the instructions must carry for it.
     WANTED = {
@@ -97,22 +104,40 @@ class InstructionsTests(unittest.TestCase):
         "Открывает новые горизонты/перспективы/возможности": "открывает новые горизонты",
     }
 
-    def test_the_vendored_table_is_exactly_what_the_instructions_cover(self) -> None:
+    def test_the_vendored_table_is_still_the_one_this_project_reasons_about(self) -> None:
+        """A drift alarm: the machine-readable bans changed upstream, look here."""
         names = sorted(name for name, _ in hard_bans())
 
         self.assertEqual(
             names,
             sorted(self.WANTED),
-            "the vendored HARD BANS changed; revisit INSTRUCTIONS and this table",
+            "the vendored HARD BANS changed; revisit the guard tests and this table",
         )
 
-    def test_every_ban_is_named_in_the_instructions(self) -> None:
+    def test_the_instructions_do_not_restate_the_ban_table(self) -> None:
+        """One copy of the rules, in the skill; a paraphrase here would drift."""
         for name, phrase in self.WANTED.items():
             with self.subTest(ban=name):
-                self.assertIn(phrase.lower(), INSTRUCTIONS.lower())
+                self.assertNotIn(phrase.lower(), INSTRUCTIONS.lower())
 
-    def test_the_procedure_come_from_the_skill_not_from_this_project(self) -> None:
+    def test_the_ban_table_the_model_sees_is_the_skill_s_own(self) -> None:
+        """SKILL.md shows the table; the machine version the guard reads is a superset."""
         skill = (markers_path().parents[2] / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("## Жёсткие запреты (HARD BANS)", skill)
+        for row in (
+            "«Не просто X, а Y»",
+            "Длинное тире «—»",
+            "«Комплексный подход/решение»",
+            "«Данный / данная / данное»",
+        ):
+            with self.subTest(row=row):
+                self.assertIn(row, skill)
+        self.assertGreaterEqual(len(hard_bans()), 15)
+
+    def test_the_procedure_comes_from_the_skill_and_the_instructions_point_at_it(self) -> None:
+        skill = (markers_path().parents[2] / "SKILL.md").read_text(encoding="utf-8")
+        name = vendored_skill().name
 
         for fragment in ("Жёсткие запреты", "Факт-замок"):
             with self.subTest(fragment=fragment):
@@ -122,7 +147,13 @@ class InstructionsTests(unittest.TestCase):
         for rule in ("удаляй, не дописывай", "канцелярит", "факты"):
             with self.subTest(rule=rule):
                 self.assertIn(rule, skill.lower())
-                self.assertIn(rule, INSTRUCTIONS.lower())
+                self.assertNotIn(
+                    rule,
+                    INSTRUCTIONS.lower(),
+                    "the rules live in the skill; the instructions point at it instead",
+                )
+
+        self.assertIn(name, INSTRUCTIONS)
 
 
 if __name__ == "__main__":

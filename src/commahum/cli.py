@@ -1,12 +1,22 @@
-"""The command line.
+"""The command line: one program, five commands.
 
-The safe thing is the default: read the file, show what would change, write
-nothing. `--write` is the opt-in, and even then the diff is printed, because the
-diff is the thing a human is meant to look at.
+    commahum rewrite <paths>   rewrite comments, show the diff, write only with --write
+    commahum report  <paths>   rewrite, then grade the result with the skill's own scanner
+    commahum measure <paths>   run a corpus and print the numbers, saving or comparing a baseline
+    commahum probe             ask pi for words that exist only in the files it was given
+    commahum check   <paths>   verify the invariant with a stand-in model — no model, no writes
 
-Stopping is safe too. Ctrl+C, a termination signal or a reader that closed the
-pipe end the run between files; each file is either rewritten whole or left
-alone; the summary says how far the run got.
+A bare `commahum <paths>` means `rewrite`, because that is the safe default: read
+the file, show what would change, write nothing. `--write` is the opt-in, and even
+then the diff is printed, because the diff is the thing a human is meant to look at.
+
+Stopping is safe too. Ctrl+C, a termination signal or a reader that closed the pipe
+end the run between files; each file is either rewritten whole or left alone; the
+summary says how far the run got.
+
+The rules are the vendored skill's, and every request loads it. A skill that is
+missing or unreadable stops the run before any file is touched: rewriting comments
+with no rules to follow would be inventing them.
 """
 
 from __future__ import annotations
@@ -17,31 +27,83 @@ import signal
 import stat
 import sys
 import tempfile
-from pathlib import Path
 
-from .codex_adapter import DEFAULT_MODEL
+from . import asking, measure, probe, report, selfcheck
 from .diff import render_diff
-from .hermes_provider import provider_generator
-from .rewrite import INSTRUCTIONS, rewrite_source
+from .interrupts import PIPE_STATUS, restore_interrupts, silence_stdout, trap_interrupts
+from .paths import collect, display_name
+from .rewrite import rewrite_source
+from .skill import SkillError, vendored_skill
 
-__all__ = ["main"]
+__all__ = ["COMMANDS", "main"]
 
 
 def main(argv=None, *, generate=None) -> int:
-    """Rewrite the comments of the given files, or of every `.nix` under a directory.
+    """Run the command named, or `rewrite` when the arguments name no other one.
 
     Returns 0 when every file was read and rewritten, 1 when a file could not be
     handled. Comments that were deliberately skipped or that the model failed to
-    rewrite are reported, but they are not errors. An interrupt stops the run
-    between files and returns 128 plus the signal that caused it, after saying
-    how far it got.
+    rewrite are reported, but they are not errors. A model or a skill that cannot
+    be set up at all — pi is not installed, the vendored skill is damaged — is 2,
+    because nothing was attempted. An interrupt stops the run between files and
+    returns 128 plus the signal that caused it, after saying how far it got.
     """
-    parser = _build_parser()
-    arguments = parser.parse_args(argv if argv is not None else sys.argv[1:])
-    if generate is None:
-        generate = _generator_for(arguments)
+    arguments = _parse(argv)
+    try:
+        return arguments.command_run(arguments, generate)
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+    except BrokenPipeError:
+        silence_stdout()
+        return PIPE_STATUS
+    except (SkillError, RuntimeError) as error:
+        print(f"commahum: {error}", file=sys.stderr)
+        return 2
 
-    paths = _collect(arguments.paths)
+
+def _parse(argv):
+    parser = _build_parser()
+    return parser.parse_args(_with_default_command(list(sys.argv[1:] if argv is None else argv)))
+
+
+def _with_default_command(argv: list[str]) -> list[str]:
+    """A bare `commahum <paths>` is `rewrite`; a command or `--help` is itself.
+
+    Only the first word decides. A file that is called `report` is reachable as
+    `commahum rewrite report` or `commahum ./report`, and the ambiguity is the
+    price of keeping the everyday invocation short.
+    """
+    if not argv or argv[0] in ("-h", "--help"):
+        return argv or ["--help"]
+    if argv[0] in COMMANDS:
+        return argv
+    return ["rewrite", *argv]
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="commahum",
+        description=(
+            "Rewrite the comments of Nix files in the style of the vendored humanizer-ru "
+            "skill, asked of pi. Nothing is written without --write."
+        ),
+    )
+    commands = parser.add_subparsers(dest="command", metavar="<command>", required=True)
+    for name, (add_arguments, run, help_text) in COMMANDS.items():
+        command = commands.add_parser(name, help=help_text, description=help_text)
+        add_arguments(command)
+        command.set_defaults(command_run=run)
+    return parser
+
+
+def run(arguments, generate=None) -> int:
+    """The `rewrite` command: what the program was originally for."""
+    skill = vendored_skill()
+    if generate is None:
+        generate = asking.generator(arguments, skill=skill)
+
+    paths = collect(arguments.paths)
     totals = {
         "rewritten": 0,
         "skipped": 0,
@@ -52,9 +114,9 @@ def main(argv=None, *, generate=None) -> int:
     }
     failed = False
     stopped = None
-    state = _trap_interrupts()
+    state = trap_interrupts()
     try:
-        failed = _rewrite_all(paths, arguments, generate, totals)
+        failed = _rewrite_all(paths, arguments, generate, totals, invocation=skill.invocation)
     except KeyboardInterrupt:
         stopped = 128 + (state["signal"] or signal.SIGINT)
         print(
@@ -64,10 +126,10 @@ def main(argv=None, *, generate=None) -> int:
             file=sys.stderr,
         )
     except BrokenPipeError:
-        _silence_stdout()
+        silence_stdout()
         stopped = PIPE_STATUS
     finally:
-        _restore_interrupts(state)
+        restore_interrupts(state)
 
     print(_totals_line(totals), file=sys.stderr)
     if stopped is not None:
@@ -75,7 +137,26 @@ def main(argv=None, *, generate=None) -> int:
     return 1 if failed else 0
 
 
-def _rewrite_all(paths, arguments, generate, totals) -> bool:
+def add_arguments(parser) -> None:
+    parser.add_argument(
+        "paths",
+        nargs="+",
+        help="files to rewrite, or directories to walk for *.nix",
+    )
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="apply the rewrites to the files instead of only showing the diff",
+    )
+    asking.add_options(parser, catalog=True)
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="print neither the request target nor the per-file progress, only the diff and the summary",
+    )
+
+
+def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool:
     """Rewrite each path in turn; return True if any of them could not be handled.
 
     Interrupts are deliberately not caught here: they unwind through this
@@ -90,9 +171,9 @@ def _rewrite_all(paths, arguments, generate, totals) -> bool:
             continue
         source = path.read_bytes()
         if not arguments.quiet:
-            print(f"{_display_name(path)}: {_progress_note(generate)}", file=sys.stderr)
+            print(f"{display_name(path)}: {_progress_note(generate)}", file=sys.stderr)
         try:
-            result = rewrite_source(source, generate)
+            result = rewrite_source(source, generate, invocation=invocation)
         except Exception as error:  # noqa: BLE001 - one bad file must not stop the rest
             print(f"{path}: {type(error).__name__}: {error}", file=sys.stderr)
             failed = True
@@ -104,7 +185,7 @@ def _rewrite_all(paths, arguments, generate, totals) -> bool:
         totals["kept"] += len(result.unrewritten)
         totals["requests"] += result.requests
 
-        diff = render_diff(source, result.rewritten, _display_name(path))
+        diff = render_diff(source, result.rewritten, display_name(path))
         if diff:
             print(diff, end="" if diff.endswith("\n") else "\n")
         if arguments.write and result.rewritten != source:
@@ -129,26 +210,6 @@ def _totals_line(totals) -> str:
     )
 
 
-def codex_generator(model: str = DEFAULT_MODEL):
-    """A generator that sends each payload to the Codex subscription endpoint."""
-    from .codex_adapter import CodexSubscriptionClient, HermesTokenStore
-
-    client = CodexSubscriptionClient(token_store=HermesTokenStore(), model=model)
-
-    def generate(prompt: str) -> str:
-        return client.complete(prompt, instructions=INSTRUCTIONS)
-
-    generate.description = f"Codex subscription · {model}"  # type: ignore[attr-defined]
-    return generate
-
-
-def _generator_for(arguments):
-    """The Codex subscription by default; any vendored provider with ``--provider``."""
-    if arguments.provider:
-        return provider_generator(arguments.provider, arguments.model)
-    return codex_generator(arguments.model or DEFAULT_MODEL)
-
-
 def _progress_note(generate) -> str:
     """What is about to happen to this file, in the terms the run was asked in.
 
@@ -160,117 +221,7 @@ def _progress_note(generate) -> str:
     return f"asking {target}" if target else "rewriting"
 
 
-PIPE_STATUS = 141  # what a shell reports for a process whose reader closed the pipe
-
-
-def _trap_interrupts() -> dict:
-    """Turn SIGINT, SIGTERM and SIGHUP into a KeyboardInterrupt at the current point.
-
-    A signal arrives between two bytecode instructions, so it unwinds the run
-    exactly where it landed: between files, or inside one — where the write is
-    atomic anyway. The first signal is remembered so the exit status can name it;
-    a second one gives up on the summary and leaves at once.
-
-    Signals belong to the main thread, so a caller from a thread gets back a
-    state with nothing installed and keeps its own handlers.
-    """
-    state: dict = {"signal": None, "previous": {}}
-
-    def handle(signum, _frame):
-        if state["signal"] is not None:
-            print("interrupted again: leaving now", file=sys.stderr, flush=True)
-            os._exit(128 + signum)
-            return  # os._exit does not return; this keeps the intent explicit
-        state["signal"] = signum
-        raise KeyboardInterrupt
-
-    try:
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            state["previous"][signum] = signal.signal(signum, handle)
-    except ValueError:  # not the main thread: the process' signals are not ours to take
-        return {"signal": None, "previous": {}}
-    return state
-
-
-def _restore_interrupts(state) -> None:
-    """Hand the signals back as they were, so a caller embedding this stays as it was."""
-    for signum, previous in state.get("previous", {}).items():
-        try:
-            signal.signal(signum, previous)
-        except ValueError:  # pragma: no cover - only reachable off the main thread
-            return
-
-
-def _silence_stdout() -> None:
-    """Point stdout at /dev/null, so the interpreter's last flush cannot raise again."""
-    try:
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-    except (OSError, ValueError):
-        pass
-
-
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="commahum",
-        description=(
-            "Rewrite the comments of Nix files and show the result as a diff. "
-            "Nothing is written without --write."
-        ),
-    )
-    parser.add_argument(
-        "paths",
-        nargs="+",
-        help="files to rewrite, or directories to walk for *.nix",
-    )
-    parser.add_argument(
-        "--write",
-        action="store_true",
-        help="apply the rewrites to the files instead of only showing the diff",
-    )
-    parser.add_argument(
-        "--model",
-        default=None,
-        help=(
-            "model to ask; without it the Codex default "
-            f"({DEFAULT_MODEL}) or the provider's own default is used"
-        ),
-    )
-    parser.add_argument(
-        "--provider",
-        default=None,
-        help=(
-            "ask a provider from the vendored Hermes layer instead of the Codex "
-            "subscription, e.g. deepseek, openrouter, nous"
-        ),
-    )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="print neither the request target nor the per-file progress, only the diff and the summary",
-    )
-    return parser
-
-
-def _collect(paths) -> list[Path]:
-    files: list[Path] = []
-    for argument in paths:
-        path = Path(argument)
-        if path.is_dir():
-            files.extend(sorted(path.rglob("*.nix")))
-        else:
-            files.append(path)
-    return files
-
-
-def _display_name(path: Path) -> str:
-    """A short name for the diff headers: relative to the working directory if it can be."""
-    try:
-        return str(path.relative_to(Path.cwd()))
-    except ValueError:
-        return str(path).lstrip("/")
-
-
-def _write_atomically(path: Path, data: bytes) -> None:
+def _write_atomically(path, data: bytes) -> None:
     """Replace ``path`` with ``data`` in one step, keeping its mode.
 
     A config file caught halfway through a write is worse than one that was not
@@ -296,3 +247,34 @@ def _write_atomically(path: Path, data: bytes) -> None:
         except OSError:
             pass
         raise
+
+
+#: Every command, as (name, add_arguments, run, one-line help). The order is the
+#: order of the help; `rewrite` is first because it is what a bare run means.
+COMMANDS = {
+    "rewrite": (
+        add_arguments,
+        run,
+        "rewrite comments and show the diff, writing nothing without --write (the default)",
+    ),
+    "report": (
+        report.add_arguments,
+        report.run,
+        "rewrite, then grade the result with the skill's own scanner",
+    ),
+    "measure": (
+        measure.add_arguments,
+        measure.run,
+        "run a corpus and print the numbers; --save a baseline, --baseline to compare",
+    ),
+    "probe": (
+        probe.add_arguments,
+        probe.run,
+        "check that the vendored skill really reaches the model, with rigged markers",
+    ),
+    "check": (
+        selfcheck.add_arguments,
+        selfcheck.run,
+        "verify the comment-only invariant with a stand-in model: no model, no network",
+    ),
+}

@@ -1,0 +1,15 @@
+{
+  "files": 5,
+  "requests": 5,
+  "applied": 17,
+  "skipped": 3,
+  "kept": 0,
+  "score_before": 59,
+  "score_after": 92,
+  "bans": 0,
+  "markers": 2,
+  "facts_kept": 16,
+  "facts_new": 0,
+  "facts_lost": 0,
+  "model": "pi · deepseek/deepseek-flash · humanizer-ru"
+}

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from .comments import CommentSpan, find_comment_spans
 
-__all__ = ["Candidate", "Selection", "select_candidates"]
+__all__ = ["Candidate", "Selection", "prose", "select_candidates"]
 
 #: `TODO:` and friends stay put; only what follows them is rewritten.
 _MARKER_WORDS = re.compile(rb"(?:TODO|FIXME|HACK|XXX)\b[:!]?[ \t]*")
@@ -81,6 +81,20 @@ def select_candidates(source: bytes) -> Selection:
         else:
             candidates.append(candidate)
     return Selection(tuple(candidates), tuple(skipped))
+
+
+def prose(source: bytes) -> str:
+    """Exactly the prose the model is sent, one comment per line.
+
+    What the scanner grades and what the model was allowed to see have to be the
+    same text: comment markers are stripped, code never appears, and the two
+    callers that measure the result (`report`, `measure`) share this one function
+    so that they cannot drift apart.
+    """
+    return "\n".join(
+        candidate.body.decode("utf-8", "surrogateescape").replace("\n", " ")
+        for candidate in select_candidates(source).candidates
+    )
 
 
 def _classify(span: CommentSpan) -> tuple[Candidate | None, str]:

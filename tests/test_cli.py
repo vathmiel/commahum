@@ -18,8 +18,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from commahum.cli import _restore_interrupts, _trap_interrupts, codex_generator, main
-from commahum.codex_adapter import DEFAULT_MODEL
+from commahum.cli import main
+from commahum.interrupts import restore_interrupts, trap_interrupts
+from commahum.rewrite import INSTRUCTIONS as rewrite_instructions
+from commahum.skill import CATALOG, FLOW_READING, SkillError, vendored_skill
 
 
 class FakeGenerator:
@@ -157,49 +159,77 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("1 kept", err)
 
-    def test_provider_flag_routes_to_the_vendored_layer(self) -> None:
+    def test_provider_flag_reaches_pi(self) -> None:
         path = self.write("home.nix", "# старое\n{ x = 1; }\n")
-        calls: list[tuple[str, str | None]] = []
+        calls: list[tuple[str | None, str | None, str]] = []
 
-        def fake_provider_generator(provider, model=None):
-            calls.append((provider, model))
+        def fake_pi_generator(model, provider, *, instructions, **rest):
+            calls.append((model, provider, instructions))
             return FakeGenerator("[[1]]\nновое\n")
 
-        with patch("commahum.cli.provider_generator", fake_provider_generator):
+        with patch("commahum.asking.pi_generator", fake_pi_generator):
             code, out, _ = self.run_cli([str(path), "--provider", "deepseek"], None)
 
         self.assertEqual(code, 0)
-        self.assertEqual(calls, [("deepseek", None)])
+        self.assertEqual([(model, provider) for model, provider, _ in calls], [(None, "deepseek")])
         self.assertIn("+# новое", out)
 
-    def test_provider_flag_passes_an_explicit_model_through(self) -> None:
-        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
-        calls: list[tuple[str, str | None]] = []
-
-        def fake_provider_generator(provider, model=None):
-            calls.append((provider, model))
-            return FakeGenerator("[[1]]\nновое\n")
-
-        with patch("commahum.cli.provider_generator", fake_provider_generator):
-            self.run_cli(
-                [str(path), "--provider", "deepseek", "--model", "deepseek-v4-pro"], None
-            )
-
-        self.assertEqual(calls, [("deepseek", "deepseek-v4-pro")])
-
-    def test_without_a_provider_the_codex_default_model_is_asked(self) -> None:
+    def test_pi_is_given_our_own_instructions(self) -> None:
         path = self.write("home.nix", "# старое\n{ x = 1; }\n")
         seen: list[str] = []
 
-        def fake_codex_generator(model=DEFAULT_MODEL):
-            seen.append(model)
+        def fake_pi_generator(model, provider, *, instructions, **rest):
+            seen.append(instructions)
             return FakeGenerator("[[1]]\nновое\n")
 
-        with patch("commahum.cli.codex_generator", fake_codex_generator):
+        with patch("commahum.asking.pi_generator", fake_pi_generator):
+            self.run_cli([str(path)], None)
+
+        self.assertEqual(seen, [rewrite_instructions])
+
+    def test_provider_flag_passes_an_explicit_model_through(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        calls: list[tuple[str | None, str | None]] = []
+
+        def fake_pi_generator(model, provider, *, instructions, **rest):
+            calls.append((model, provider))
+            return FakeGenerator("[[1]]\nновое\n")
+
+        with patch("commahum.asking.pi_generator", fake_pi_generator):
+            self.run_cli(
+                [str(path), "--provider", "deepseek", "--model", "deepseek/deepseek-v4-pro"],
+                None,
+            )
+
+        self.assertEqual(calls, [("deepseek/deepseek-v4-pro", "deepseek")])
+
+    def test_without_a_model_pi_is_left_to_choose_one(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        seen: list[tuple[str | None, str | None]] = []
+
+        def fake_pi_generator(model, provider, *, instructions, **rest):
+            seen.append((model, provider))
+            return FakeGenerator("[[1]]\nновое\n")
+
+        with patch("commahum.asking.pi_generator", fake_pi_generator):
             code, _, _ = self.run_cli([str(path)], None)
 
         self.assertEqual(code, 0)
-        self.assertEqual(seen, [DEFAULT_MODEL])
+        self.assertEqual(seen, [(None, None)])
+
+    def test_a_missing_pi_is_a_clean_refusal_and_not_a_traceback(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+
+        def refusing_pi_generator(model, provider, *, instructions, **rest):
+            raise RuntimeError("pi is not on PATH: install it or point $COMMAHUM_PI at it")
+
+        with patch("commahum.asking.pi_generator", refusing_pi_generator):
+            code, out, err = self.run_cli([str(path)], None)
+
+        self.assertEqual(code, 2)
+        self.assertIn("commahum: pi is not on PATH", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(out, "")
 
     def test_reports_where_the_request_goes(self) -> None:
         path = self.write("home.nix", "# старое\n{ x = 1; }\n")
@@ -210,6 +240,54 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("home.nix: asking deepseek · deepseek-flash", err)
+
+    def test_the_request_opens_with_the_skill_and_carries_the_flow_reading(self) -> None:
+        """The rules travel with every file, not once per run."""
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        generator = FakeGenerator("[[1]]\nновое\n")
+        skill = vendored_skill()
+        seen: list[dict] = []
+
+        def fake_pi_generator(model, provider, **kwargs):
+            seen.append(kwargs)
+            return generator
+
+        with patch("commahum.asking.pi_generator", fake_pi_generator):
+            code, _, _ = self.run_cli([str(path)], None)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(seen[0]["skill"], skill)
+        self.assertEqual(seen[0]["readings"], FLOW_READING)
+        self.assertTrue(generator.prompts[0].startswith(skill.opening), generator.prompts[0])
+        self.assertIn("[[1]]", generator.prompts[0])
+        self.assertIn("старое", generator.prompts[0])
+
+    def test_the_catalogue_is_sent_only_when_it_was_asked_for(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        seen: list[dict] = []
+
+        def fake_pi_generator(model, provider, **kwargs):
+            seen.append(kwargs)
+            return FakeGenerator("[[1]]\nновое\n")
+
+        with patch("commahum.asking.pi_generator", fake_pi_generator):
+            self.run_cli(["--catalog", str(path)], None)
+
+        self.assertEqual(seen[0]["readings"], (*FLOW_READING, CATALOG))
+
+    def test_a_missing_skill_is_a_clean_refusal_and_not_a_traceback(self) -> None:
+        """No rules means no run: comments are not rewritten by taste."""
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        refusal = SkillError("no vendored skill: expected vendor/humanizer-ru/SKILL.md")
+
+        with patch("commahum.cli.vendored_skill", side_effect=refusal):
+            code, out, err = self.run_cli([str(path)], FakeGenerator("[[1]]\nновое\n"))
+
+        self.assertEqual(code, 2)
+        self.assertIn("commahum: no vendored skill", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(out, "")
+        self.assertEqual(path.read_bytes(), "# старое\n{ x = 1; }\n".encode())
 
     def test_a_generator_without_a_named_target_still_reports_progress(self) -> None:
         path = self.write("home.nix", "# старое\n{ x = 1; }\n")
@@ -232,14 +310,6 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("rewriting", err)
         self.assertIn("1 rewritten", err)
         self.assertIn("+# новое", out)
-
-    def test_the_codex_generator_names_its_target(self) -> None:
-        with patch("commahum.codex_adapter.CodexSubscriptionClient"), patch(
-            "commahum.codex_adapter.HermesTokenStore"
-        ):
-            generate = codex_generator("gpt-5.5")
-
-        self.assertEqual(generate.description, "Codex subscription · gpt-5.5")
 
 
 class InterruptTests(unittest.TestCase):
@@ -317,13 +387,13 @@ class InterruptTests(unittest.TestCase):
                 self.assertNotIn("Traceback", err)
 
     def test_a_second_interrupt_leaves_immediately(self) -> None:
-        state = _trap_interrupts()
-        self.addCleanup(_restore_interrupts, state)
+        state = trap_interrupts()
+        self.addCleanup(restore_interrupts, state)
         handler = signal.getsignal(signal.SIGINT)
 
         with self.assertRaises(KeyboardInterrupt):
             handler(signal.SIGINT, None)
-        with patch("commahum.cli.os._exit") as exit_now:
+        with patch("commahum.interrupts.os._exit") as exit_now:
             handler(signal.SIGINT, None)
 
         exit_now.assert_called_once_with(130)
@@ -362,14 +432,90 @@ class InterruptTests(unittest.TestCase):
         state: list[dict] = []
 
         def install() -> None:
-            state.append(_trap_interrupts())
-            _restore_interrupts(state[-1])
+            state.append(trap_interrupts())
+            restore_interrupts(state[-1])
 
         thread = threading.Thread(target=install)
         thread.start()
         thread.join()
 
         self.assertEqual(state[0]["previous"], {})
+
+    def test_a_bare_path_still_means_rewrite(self) -> None:
+        """The everyday invocation stays short; naming the command is optional."""
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+
+        code, out, err = self.run_cli([str(path)], FakeGenerator("[[1]]\nновое\n"))
+
+        self.assertEqual(code, 0)
+        self.assertIn("-# старое", out)
+        self.assertIn("1 files, 1 comments rewritten", err)
+
+    def test_the_command_may_be_named_explicitly(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+
+        code, out, _ = self.run_cli(["rewrite", str(path)], FakeGenerator("[[1]]\nновое\n"))
+
+        self.assertEqual(code, 0)
+        self.assertIn("+# новое", out)
+        self.assertIn("-# старое", out)
+
+    def test_the_help_lists_every_command(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit) as caught:
+            main(["--help"])
+
+        self.assertEqual(caught.exception.code, 0)
+        for name in ("rewrite", "report", "probe", "check"):
+            self.assertIn(name, out.getvalue())
+
+    def test_no_arguments_at_all_prints_the_same_help(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit) as caught:
+            main([])
+
+        self.assertEqual(caught.exception.code, 0)
+        self.assertIn("usage: commahum", out.getvalue())
+
+    def test_a_file_named_like_a_command_is_reachable_by_path(self) -> None:
+        """`commahum report` is the command; the file of that name is `./report`.
+
+        The price of keeping the everyday invocation short is exactly this, so it
+        is pinned: no clever guessing at which one the user meant.
+        """
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            main(["report"])
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("paths", err.getvalue())
+
+
+class ReportCommandTests(unittest.TestCase):
+    """`report` runs the pipeline, then hands the prose to the skill's own scanner."""
+
+    def setUp(self) -> None:
+        try:
+            import pymorphy3  # noqa: F401
+            import razdel  # noqa: F401
+        except ImportError:  # pragma: no cover - the extra is optional
+            self.skipTest("the `style` extra is not installed, so the scanner cannot run")
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def test_the_scanner_grades_the_rewrite(self) -> None:
+        path = self.root / "home.nix"
+        path.write_bytes("# Комментарий, который был канцеляритом.\n{ x = 1; }\n".encode())
+        generator = FakeGenerator("[[1]]\nКомментарий проще.\n")
+
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(["report", str(path)], generate=generator)
+
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn("1 rewritten", err.getvalue())
+        self.assertIn("ЧИСТОТА", out.getvalue())
 
 
 if __name__ == "__main__":

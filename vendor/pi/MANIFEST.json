@@ -1,0 +1,44 @@
+{
+  "upstream": "https://github.com/earendil-works/pi",
+  "package": "@earendil-works/pi-coding-agent",
+  "revision": "0.87.1",
+  "license": "MIT (see LICENSE.pi, Copyright (c) 2025 Mario Zechner)",
+  "taken_from": "nixpkgs pi-coding-agent 0.87.1, /nix/store/q9gk8vgqbcs39yd3q0a8y48rdz53rmbw-pi-coding-agent-0.87.1/lib/node_modules/pi-monorepo",
+  "tree": {
+    "path": "vendor/pi/",
+    "kind": "the published package, minus the parts this project never runs",
+    "files": 1996,
+    "size": "15.9 MB",
+    "entry": "dist/bundle/cli.js — package.json's `bin`, run with node >= 22.19.0 (its `engines`)",
+    "what": {
+      "dist/": "the built CLI: bundle/ and the data files it reads, the interactive themes among them",
+      "node_modules/@earendil-works/chord": "imported by the bundle at runtime",
+      "node_modules/@silvia-odwyer/photon-node": "imported by the bundle at runtime (image tools)",
+      "node_modules/typebox": "imported by the bundle at runtime (schema validation)",
+      "package.json": "the package's own manifest: version, bin, engines, dependencies",
+      "npm-shrinkwrap.json": "the dependency tree pi publishes; kept for provenance and for a full install should one ever be wanted"
+    },
+    "hashes": {
+      "dist": "497 files, sha256 cf8000c18640e16630361e9e7f3b12c0",
+      "node_modules/@earendil-works/chord": "105 files, sha256 0d17045d2e5f51583677d37b2897ddcd",
+      "node_modules/@silvia-odwyer/photon-node": "7 files, sha256 3219c121a40f1c6b934c3831395569c6",
+      "node_modules/typebox": "1385 files, sha256 54c728c9b2967ae21def27bfffeba1c1"
+    }
+  },
+  "omitted": [
+    "*.map source maps (432 files, 6.5 MB): debug artifacts the runtime does not read",
+    "the rest of what npm installs from the shrinkwrap (166 MB in 91 packages). The bundle inlines most of them and names others in code paths a print run does not take; the three vendored packages are the ones our path imports",
+    "docs/ and examples/ (4.1 MB): shipped by the package, unread by a print run"
+  ],
+  "verified": [
+    "every vendored file is byte-identical to the file it was copied from, subtree hashes above",
+    "node dist/bundle/cli.js --version prints 0.87.1 on node 24.20.0",
+    "a live request through the vendored copy answers in about 1.6 s (deepseek/deepseek-flash, --print --no-tools)"
+  ],
+  "used_by": [
+    "src/commahum/pi_runner.py: runs vendor/pi/dist/bundle/cli.js with the node on PATH, unless $COMMAHUM_PI or a pi on PATH is asked for instead",
+    "tests/test_pi_runner.py: fails if this tree is missing from a checkout"
+  ],
+  "drift_note": "A pi feature outside the verified path may ask for a package that is not vendored. Node names the missing specifier when it happens, and the fix is to copy that package from the same source and extend the hashes above.",
+  "refresh": "nix build nixpkgs#pi-coding-agent; copy dist/ (without .map), the three node_modules packages, package.json and npm-shrinkwrap.json into vendor/pi/, then redo the subtree hashes"
+}

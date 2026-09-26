@@ -14,28 +14,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The Codex subscription path used by the rewriting pipeline. Optional: the
-# parser, the selector, the patcher and the diff work without it.
-codex = [
-  "openai==3.19.2",
-  "httpx==0.28.1",
-]
-# What vendor/hermes needs at import time, so every provider integration in the
-# tree can be imported and used. The provider-specific client libraries are not
-# here on purpose: add the one you need (`anthropic`, `boto3`, ...) when you add
-# that provider.
-#
-# openai is pinned once for the whole project. Upstream Hermes pins 2.24.0 while
-# this project's adapter was verified against 3.19.2; if a vendored provider call
-# misbehaves, the version split is the first thing to look at.
-hermes = [
-  "httpx[socks]==0.28.1",
-  "openai==3.19.2",
-  "prompt_toolkit==3.0.52",
-  "requests==2.33.0",
-  "ruamel.yaml==0.18.16",
-  "truststore==0.10.4",
-]
 # What the vendored humanizer-ru scanner needs (tools/style_report.py). The
 # rewriting itself does not: src/commahum/bans.py reads the ban table with ast,
 # so the package imports none of the skill's code.
@@ -52,4 +30,4 @@ commahum = "commahum.cli:main"
 packages = ["src/commahum"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/commahum", "tests", "README.md"]
+include = ["src/commahum", "tests", "eval", "README.md"]

@@ -3,23 +3,43 @@
   "revision": "v3.30.0 (8adece34bf833ef35b247bb46f22be4298f0fa9f)",
   "license": "MIT (see LICENSE.humanizer-ru, Copyright (c) 2026 Ilya Utov)",
   "tarball_sha256": "9e7c6358353cd4ffef985b4ae2908fe6d7c3a2145fce764624a878f32ae485ab",
+  "skills_in_repository": [
+    "humanizer-ru"
+  ],
   "tree": {
     "path": "vendor/humanizer-ru/",
-    "kind": "verbatim copy of the repository's skill directory, skills/humanizer-ru, taken from the tag's tarball",
-    "files": 19,
-    "what": {
-      "SKILL.md": "the rules: modes, the marking procedure, the HARD BANS table, the fact lock, the verification step",
-      "references/catalog.md": "all 64 patterns with before and after examples",
-      "references/audit.md": "the audit mode: scan, report, change nothing",
-      "references/review.md": "the review gate",
-      "scripts/scan.py": "the deterministic scanner, prints a cleanliness score",
-      "scripts/humanizer_metrics/markers.py": "HARD BANS as name plus regular expression; the table src/commahum/bans.py reads"
+    "kind": "verbatim copy of the repository's whole skill directory, skills/humanizer-ru, unpacked from the tag's tarball; this repository carries no other skill",
+    "files": 18,
+    "catalog_patterns": 67,
+    "hard_bans": 21,
+    "sha256": {
+      "SKILL.md": "ff13b597e3fa1471f81af0de66d66dc8b50b741c1aee1ba1d61c9f25f76c9422",
+      "agents/openai.yaml": "447d048ecffc8e37bccb6bb411035effccd26e34e9512fcf21d3955c507f7442",
+      "edit-log.md": "1ab7758e4abd09be3163e228ec7ce34b333521c9b219aaba027ff39fce8a533d",
+      "references/audit.md": "d14d952bcccbe5412a52f652917f86b2462209ac1923d9b0ff4ea0a62a72e955",
+      "references/catalog.md": "023e8b4410e68de15e07451d9f22b1a1bd1b9a5f3fc4a57d4e9755a15d95525e",
+      "references/review.md": "a1b9fe15bb2c4a34629896f0ade704724590ffcaf8a83b64657ef2c19abfb9a3",
+      "scripts/humanizer_metrics/__init__.py": "dc22085978c29c78b3a58b1d95d84464db3433bffcc17ecd5751dcce73286096",
+      "scripts/humanizer_metrics/burstiness.py": "a4a6f4880df7385caafcfe024af470520124f66c9878b25412aa97929e6a0196",
+      "scripts/humanizer_metrics/facts.py": "cc4e182bffe7533ea75aa3f33a2f57fd14160857f838ad96e8bf2bf09a1456a0",
+      "scripts/humanizer_metrics/lexical.py": "5c5e929989f2ac13109d96eb054413df6fa5ed10499796bce14f4194208b7eb0",
+      "scripts/humanizer_metrics/markdown.py": "86ebd9330af09df3c4c6f609b6f90efc103fbeee72e0361235cb37d7d5817a12",
+      "scripts/humanizer_metrics/markers.py": "88e72f4709c1c8f59e105647a40bee9672127dc2ea076e690845543a987b4db6",
+      "scripts/humanizer_metrics/mcp_server.py": "b21b219d1d8f76c93ad797e4a2197b85eaac59f617924e53ac144dbd43b048bb",
+      "scripts/humanizer_metrics/morphology.py": "daee63ed2670fe2771330f747b5a8a1b184930be6ebc03ad76a56a55dc1138e3",
+      "scripts/humanizer_metrics/repeats.py": "84d50c06d80b702ef9b3bb17d0a1a9684609f03f774ed0c2e43fe9a465de3eef",
+      "scripts/humanizer_metrics/score.py": "002e03445f895d38ff8af9d76808e6d407dd49be85a6ccc559c3566760c6c749",
+      "scripts/humanizer_metrics/structure.py": "96431de579d70f26c89aa0493e88de2a9a29d371ebce2c3b86855af74a5a0da5",
+      "scripts/scan.py": "ddc71dea5d5126e593a04ca4338ee4bb7bc8b35c6d0e9163602e4a6f0c9621f9"
     }
   },
   "used_by": [
-    "src/commahum/rewrite.py: the instructions sent with every request encode the procedure, the bans and the fact lock",
+    "src/commahum/skill.py: finds the skill, reads its name out of the frontmatter, refuses a run without it",
+    "src/commahum/pi_runner.py: hands it to pi with --skill and opens every prompt with its invocation; appends the files its flow reads",
     "src/commahum/bans.py: refuses a rewrite that introduces a hard ban the original did not have",
-    "tests/test_bans.py and tests/test_rewrite.py"
+    "src/commahum/rewrite.py: the role, the register and the reply protocol; the rules themselves are the skill's own text",
+    "tests/test_skill.py, tests/test_bans.py, tests/test_rewrite.py, tests/test_pi_runner.py, tests/test_cli.py"
   ],
-  "note": "The scanner needs razdel and pymorphy3. The rewriting pipeline reads only the ban table, through ast, and imports none of the skill's code."
+  "how_to_refresh": "Write a script that downloads https://codeload.github.com/ilyautov/humanizer-ru/tar.gz/refs/tags/<tag>, unpacks skills/humanizer-ru/, recomputes this file's sha256 map over the unpacked bytes and rewrites the revision; tests/test_skill.py compares the checkout against this map, so a copy that drifted from the pin fails the suite. Refresh the map and the checkout together.",
+  "note": "The scanner needs razdel and pymorphy3; the rewriting pipeline reads only the ban table, through ast, and imports none of the skill's code. Files at the top of this directory that the skill does not have: LICENSE.humanizer-ru and MANIFEST.json."
 }
