@@ -16,10 +16,14 @@ file count changes.
 ## Running it
 
 ```sh
-set -a; . ~/.hermes/.env; set +a        # pi reads the provider key from the environment
 .venv/bin/commahum measure --model deepseek/deepseek-flash eval/corpus
 .venv/bin/commahum measure --model deepseek/deepseek-flash --baseline eval/baseline.json eval/corpus
 ```
+
+No key needs to be exported: pi reads it from its own store
+(`~/.pi/agent/auth.json`), which is why the baseline records the model but no
+credential. `commahum auth` says whether pi is ready and where the credential came
+from; `commahum auth --store <provider>` puts one there without pi's TUI.
 
 The first prints the numbers; the second compares them with the recorded baseline
 and exits 1 on a regression — a lower score, a hard ban that appeared, a fact that

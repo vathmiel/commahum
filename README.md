@@ -201,9 +201,46 @@ quiet pass. `eval/` holds the frozen corpus and the recorded baseline; `--save`
 re-records it, which should be a deliberate act with a reason, not a reflex after a
 red run.
 
+## Authorizing a provider
+
+Credentials are pi's, and this project keeps no copy of them. What a run needs to
+know — will pi answer, and with what — is one command:
+
+```sh
+$ .venv/bin/commahum auth
+deepseek: ready — the credential is in pi's store (/home/vathmiel/.pi/agent/auth.json, mode 0o600)
+anthropic: ready — the credential comes from the environment
+```
+
+pi's own `auth check` answers `ready` or `not_ready` but never says *where* the
+credential came from, and that is exactly the question when a run works on one
+machine and not on another. So the source is worked out the way anything invisible
+here is: ask with the environment as it is, then ask again with every provider
+variable taken away. Ready in both means pi's store; ready only in the first means
+the shell; not ready in either is not ready, and pi's own word for the reason is
+printed. Without `--provider` every provider in the store is asked about, and
+`--model provider/id` names one just as well.
+
+Putting a key into pi's store is otherwise a TUI affair (`pi`, then `/login`).
+`--store` does it from here, reading the key from stdin, a named variable or a file
+— never from the command line, which the process table displays — and then *asking
+pi* whether the key works:
+
+```sh
+$ .venv/bin/commahum auth --store deepseek --from-file ~/.hermes/.env --from-var DEEPSEEK_API_KEY
+deepseek: the key is in /home/vathmiel/.pi/agent/auth.json, mode 0o600, and pi confirms it; 35 characters were never shown
+```
+
+The store is written atomically, every other provider is kept, and an entry pi does
+not confirm is rolled back byte for byte — a credential is either confirmed by pi or
+it is not a credential. A store file that is not valid JSON is refused rather than
+overwritten, and a key is never printed, not even its first characters. A
+subscription is not something this command can copy: `--login` hands the terminal to
+pi, whose `/login` runs that flow and keeps refreshing its tokens afterwards.
+
 ## Status
 
-Working end to end. 202 unit tests (stdlib `unittest`, no network) plus an
+Working end to end. 238 unit tests (stdlib `unittest`, no network) plus an
 invariant check over a real config tree and a live probe of the skill wiring:
 
 ```sh
@@ -260,6 +297,16 @@ the parser rather than asserted.
 - [x] a change is judged by numbers: `commahum measure` runs a frozen corpus,
       records the metrics as a baseline and calls a lower score, a new ban or a
       moved fact a regression — two runs of the same corpus agreed exactly
+- [x] what pi will answer with is one command: `commahum auth` names the provider,
+      the credential's kind, and whether it came out of pi's store or the shell
+- [x] the one thing pi does not say — where the credential came from — is computed
+      by asking twice, the second time with every provider variable removed, rather
+      than guessed from the presence of a variable
+- [x] a key can be stored without the TUI, and only counts once pi itself confirms
+      it: the write is atomic, keeps every other provider, and is rolled back byte
+      for byte when pi does not confirm the entry
+- [x] the key is never taken from the command line and never printed, not even a
+      prefix — the command line is visible in the process table
 
 ## Usage
 
@@ -270,6 +317,8 @@ the parser rather than asserted.
 .venv/bin/commahum report path/to/file.nix        # rewrite, then grade it with the scanner
 .venv/bin/commahum measure --baseline eval/baseline.json eval/corpus   # is it still as good?
 .venv/bin/commahum probe --model deepseek/deepseek-flash   # is the skill reaching the model?
+.venv/bin/commahum auth                            # will pi answer, and from where?
+.venv/bin/commahum auth --store deepseek --from-file ~/.hermes/.env --from-var DEEPSEEK_API_KEY
 .venv/bin/commahum --provider deepseek path/to/file.nix    # ask another provider
 .venv/bin/commahum --catalog path/to/file.nix     # also send the 67-pattern catalogue
 .venv/bin/commahum --quiet path/or/dir            # no progress, just the diff and the summary
@@ -279,9 +328,10 @@ A bare `commahum <paths>` means `rewrite`, because that is the safe default: rea
 show, write nothing. The others are named because they are asked for by name —
 `check` before trusting anything (it is the one command that needs no key and no
 network), `report` when the question is "did that edit actually improve the text",
-`measure` when the question is whether a *change* did, and `probe` when the question
-is whether the rules reach the model at all. Only the first word decides which
-command runs, so a file called `report` is `./report`.
+`measure` when the question is whether a *change* did, `probe` when the question
+is whether the rules reach the model at all, and `auth` when the question is
+whether pi will answer in the first place — and with which credential. Only the
+first word decides which command runs, so a file called `report` is `./report`.
 
 Every request loads the vendored skill and carries the two files its flow reads;
 `--catalog` adds the full pattern catalogue (93 KB, roughly 25k tokens per
@@ -293,10 +343,13 @@ it vendored in `vendor/pi/`, unless `$COMMAHUM_PI` points somewhere else.
 `openai-codex/gpt-5.5`, `sonnet:high`), and naming the provider there is what
 picks it: `--provider deepseek` on its own still gets an answer from the model pi
 is configured with, which is why the progress line says so. Credentials are pi's
-too: a key is read from the environment (`DEEPSEEK_API_KEY`), a subscription plan
-is signed in through pi itself (`pi` in a terminal, `/login`, then
-`pi auth check --provider openai-codex` to see where it stands). Nothing about
-credentials is stored in this project.
+too, and they live in pi's own store: `~/.pi/agent/auth.json` (mode 600) holds one
+entry per provider — `{"deepseek": {"type": "api_key", "key": "..."}}` or the OAuth
+triple a subscription signs in with — and a key in the environment is used when the
+store has none. `commahum auth` says what pi is ready for and where the credential
+came from; see "Authorizing a provider" below. Nothing about credentials is stored
+in this project, and a run needs no environment variable when pi holds the
+credential.
 
 A run says where each request goes before it waits for it, so a directory that
 takes minutes is not silent:
@@ -447,7 +500,8 @@ src/commahum/skill.py         where the skill is, what it is called, what the fl
 src/commahum/asking.py        the options every command shares, and the one generator
 src/commahum/paths.py         arguments in, files out
 src/commahum/interrupts.py    stopping a run between files
-src/commahum/cli.py           the command line: rewrite, report, probe, check
+src/commahum/cli.py           the command line: six commands, one per question
+src/commahum/auth.py          `auth`: what pi is ready for, where the credential came from
 src/commahum/report.py        `report`: before/after grading with the vendored scanner
 src/commahum/measure.py       `measure`: the corpus, the numbers, the baseline
 src/commahum/probe.py         `probe`: is the skill really reaching the model?
