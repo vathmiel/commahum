@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from codex_adapter import CodexAuthError, CodexSubscriptionClient, HermesTokenStore
+from commahum.codex_adapter import CodexAuthError, CodexSubscriptionClient, HermesTokenStore
 
 
 def main() -> None:

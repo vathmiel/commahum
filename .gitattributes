@@ -1,0 +1,4 @@
+# Vendored upstream code is copied byte for byte, including its whitespace.
+# `git diff --check` otherwise reports upstream's trailing blank lines as if
+# they were ours to fix.
+vendor/hermes/** -whitespace

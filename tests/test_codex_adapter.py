@@ -1,6 +1,6 @@
 import unittest
 
-from codex_adapter import CodexSubscriptionClient
+from commahum.codex_adapter import CodexSubscriptionClient
 
 
 class FakeEvents:
@@ -162,7 +162,7 @@ def _cross_process_refresh_worker(auth_path, barrier, calls, results):
     import time
     from pathlib import Path
 
-    from codex_adapter import HermesTokenStore
+    from commahum.codex_adapter import HermesTokenStore
 
     class DelayedHTTPClient(FakeHTTPClient):
         def post(self, url, **kwargs):
@@ -182,7 +182,7 @@ def _cross_process_refresh_worker(auth_path, barrier, calls, results):
 
 class HermesTokenStoreTests(unittest.TestCase):
     def _store_with_http_client(self, auth_path, http_client):
-        from codex_adapter import HermesTokenStore
+        from commahum.codex_adapter import HermesTokenStore
 
         original = _expired_auth_store()
         auth_path.write_bytes(original)
@@ -199,7 +199,7 @@ class HermesTokenStoreTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from codex_adapter import CodexAuthError
+        from commahum.codex_adapter import CodexAuthError
 
         with tempfile.TemporaryDirectory() as temp_dir:
             auth_path = Path(temp_dir) / "auth.json"
@@ -280,7 +280,7 @@ class HermesTokenStoreTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from codex_adapter import CodexAuthError
+        from commahum.codex_adapter import CodexAuthError
 
         with tempfile.TemporaryDirectory() as temp_dir:
             auth_path = Path(temp_dir) / "auth.json"
@@ -298,7 +298,7 @@ class HermesTokenStoreTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from codex_adapter import CodexAuthError
+        from commahum.codex_adapter import CodexAuthError
 
         with tempfile.TemporaryDirectory() as temp_dir:
             auth_path = Path(temp_dir) / "auth.json"
@@ -318,7 +318,7 @@ class HermesTokenStoreTests(unittest.TestCase):
         from pathlib import Path
 
         import httpx
-        from codex_adapter import CodexAuthError
+        from commahum.codex_adapter import CodexAuthError
 
         with tempfile.TemporaryDirectory() as temp_dir:
             auth_path = Path(temp_dir) / "auth.json"
@@ -357,7 +357,7 @@ class HermesTokenStoreTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from codex_adapter import CodexAuthError
+        from commahum.codex_adapter import CodexAuthError
 
         with tempfile.TemporaryDirectory() as temp_dir:
             auth_path = Path(temp_dir) / "auth.json"
@@ -396,7 +396,7 @@ class HermesTokenStoreTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from codex_adapter import HermesTokenStore
+        from commahum.codex_adapter import HermesTokenStore
 
         def token_with_exp(exp):
             payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).decode().rstrip("=")
@@ -439,7 +439,7 @@ class HermesTokenStoreTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from codex_adapter import CodexAuthError, HermesTokenStore
+        from commahum.codex_adapter import CodexAuthError, HermesTokenStore
 
         with tempfile.TemporaryDirectory() as temp_dir:
             auth_path = Path(temp_dir) / "auth.json"
@@ -457,7 +457,7 @@ class HermesTokenStoreTests(unittest.TestCase):
         from concurrent.futures import ThreadPoolExecutor
         from pathlib import Path
 
-        from codex_adapter import HermesTokenStore
+        from commahum.codex_adapter import HermesTokenStore
 
         payload = base64.urlsafe_b64encode(json.dumps({"exp": 99}).encode()).decode().rstrip("=")
         expired = f"header.{payload}.signature"

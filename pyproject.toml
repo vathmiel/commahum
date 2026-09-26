@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "commahum"
+version = "0.1.0"
+description = "Stylistic rewriting of comments in Nix sources that never touches non-comment bytes"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "tree-sitter==0.25.2",
+  "tree-sitter-nix==0.1.0",
+]
+
+[project.optional-dependencies]
+# The Codex subscription path used by the rewriting pipeline. Optional: the
+# parser, the selector, the patcher and the diff work without it.
+codex = [
+  "openai==3.19.2",
+  "httpx==0.28.1",
+]
+# What vendor/hermes needs at import time, so every provider integration in the
+# tree can be imported and used. The provider-specific client libraries are not
+# here on purpose: add the one you need (`anthropic`, `boto3`, ...) when you add
+# that provider.
+#
+# openai is pinned once for the whole project. Upstream Hermes pins 2.24.0 while
+# this project's adapter was verified against 3.19.2; if a vendored provider call
+# misbehaves, the version split is the first thing to look at.
+hermes = [
+  "httpx[socks]==0.28.1",
+  "openai==3.19.2",
+  "prompt_toolkit==3.0.52",
+  "requests==2.33.0",
+  "ruamel.yaml==0.18.16",
+  "truststore==0.10.4",
+]
+
+[project.scripts]
+commahum = "commahum.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/commahum"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/commahum", "tests", "README.md"]

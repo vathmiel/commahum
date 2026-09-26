@@ -1,0 +1,26 @@
+{
+  "upstream": "https://github.com/NousResearch/hermes-agent",
+  "revision": "59004a62356f3a4697ab0fe8ad5086d2b405e2a6",
+  "license": "MIT",
+  "tree": {
+    "path": "vendor/hermes/",
+    "kind": "verbatim copies of upstream files; copied, never installed as a distribution",
+    "python_files": 160,
+    "provider_profiles": 38,
+    "captured_by": "tools/closure_probe.py",
+    "captured_record": "captured.json",
+    "why": "Hermes' provider layer is the practical route to integrations other than the Codex subscription: the per-provider sign-in modules, the provider registry, the model catalogs and the credential store all assume each other's presence.",
+    "whitespace": "byte-for-byte upstream copies. Whitespace linters must leave this tree alone (.gitattributes marks it -whitespace); normalising it would break the provenance.",
+    "profiles_are_scanned_not_imported": "plugins/model-providers/<name>/ holds one provider profile each (__init__.py + plugin.yaml). providers/__init__.py scans that directory relative to the package root, so an absent profile never raises: the provider silently loses its default model, aliases and capabilities while every import still succeeds. Copy that directory whenever the tree is captured; tests/test_vendor_tree.py guards it."
+  },
+  "narrow_adapter": {
+    "path": "src/commahum/codex_adapter.py",
+    "kind": "narrow adaptation for the Codex subscription request path; it does not import the vendored tree",
+    "spike": "../../spikes/001-codex-vendor/"
+  },
+  "used_by": [
+    "src/commahum/hermes_tree.py — loads the tree fail-closed",
+    "src/commahum/hermes_provider.py — provider_generator for the rewriting pipeline",
+    "tools/closure_probe.py — integrations / capture / isolated / augment"
+  ]
+}

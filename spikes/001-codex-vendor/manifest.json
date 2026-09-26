@@ -3,8 +3,8 @@
   "revision": "59004a62356f3a4697ab0fe8ad5086d2b405e2a6",
   "license": "MIT",
   "implementation": {
-    "path": "codex_adapter.py",
-    "kind": "narrow adaptation; no Hermes modules are vendored or imported at runtime"
+    "path": "../../src/commahum/codex_adapter.py",
+    "kind": "narrow adaptation of the Codex subscription request path; it does not import the vendored tree"
   },
   "referenced_upstream_files": [
     {
@@ -47,8 +47,11 @@
     "openai": "3.19.2",
     "httpx": "0.28.1"
   },
-  "removed_probe_snapshot": {
+  "probe_snapshot": {
     "python_files": 117,
-    "reason": "The dynamic closure pulled unrelated Hermes providers and agent features; it was replaced by the narrow adapter."
+    "removed_then": "The dynamic closure pulled unrelated Hermes providers and agent features, so the narrow adapter replaced it.",
+    "restored_to": "../../vendor/hermes/",
+    "why_restored": "The narrow adapter left the Codex subscription as the only reachable provider. The closure is the practical route to the other integrations, so it is kept as a project asset instead of being re-captured by hand.",
+    "manifest": "../../vendor/hermes/MANIFEST.json"
   }
 }
