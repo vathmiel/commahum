@@ -90,6 +90,9 @@ the parser rather than asserted.
 - [x] CLI, showing the diff by default and writing only with `--write`
 - [x] the CLI names the request target and reports progress per file, with
       `--quiet` dropping both
+- [x] interrupts — Ctrl+C, `SIGTERM`, `SIGHUP`, a reader that closed the pipe —
+      stop the run between files, name the signal in the exit status, and leave
+      neither a half-written file nor a temporary file behind
 - [x] the vendored provider layer imports and resolves providers on its own,
       guarded by `tests/test_vendor_tree.py`
 - [x] any of its providers can drive the rewriting: `--provider deepseek` asks
@@ -127,6 +130,23 @@ hosts/deep-thought/generations.nix: 16 rewritten, 1 skipped, 0 kept
 
 Progress and the summary go to stderr, the diff to stdout, so redirecting stdout
 still yields nothing but the patch.
+
+Stopping is safe. Ctrl+C, a termination signal or a closed stdout ends the run
+between files: every file is either rewritten whole or left as it was — the new
+bytes go to a temporary file and are moved into place with one `os.replace` —
+the summary says how far the run got, and the exit status names the signal
+(130 for Ctrl+C, 143 for `SIGTERM`, 129 for `SIGHUP`, 141 for a closed pipe). A
+second Ctrl+C leaves at once.
+
+```sh
+$ commahum --provider deepseek /etc/nixos/modules
+modules/home/cli/fish.nix: asking deepseek · deepseek-flash
+^C
+interrupted: SIGINT, stopped after 0 of 26 files, 0 written
+0 files, 0 comments rewritten, 0 skipped, 0 kept, 0 requests
+$ echo $?
+130
+```
 
 ## Provider integrations
 

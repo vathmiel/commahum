@@ -3,12 +3,17 @@
 The safe thing is the default: read the file, show what would change, write
 nothing. `--write` is the opt-in, and even then the diff is printed, because the
 diff is the thing a human is meant to look at.
+
+Stopping is safe too. Ctrl+C, a termination signal or a reader that closed the
+pipe end the run between files; each file is either rewritten whole or left
+alone; the summary says how far the run got.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import signal
 import stat
 import sys
 import tempfile
@@ -27,16 +32,58 @@ def main(argv=None, *, generate=None) -> int:
 
     Returns 0 when every file was read and rewritten, 1 when a file could not be
     handled. Comments that were deliberately skipped or that the model failed to
-    rewrite are reported, but they are not errors.
+    rewrite are reported, but they are not errors. An interrupt stops the run
+    between files and returns 128 plus the signal that caused it, after saying
+    how far it got.
     """
     parser = _build_parser()
     arguments = parser.parse_args(argv if argv is not None else sys.argv[1:])
     if generate is None:
         generate = _generator_for(arguments)
 
+    paths = _collect(arguments.paths)
+    totals = {
+        "rewritten": 0,
+        "skipped": 0,
+        "kept": 0,
+        "files": 0,
+        "written": 0,
+        "requests": 0,
+    }
     failed = False
-    totals = {"rewritten": 0, "skipped": 0, "kept": 0, "files": 0, "requests": 0}
-    for path in _collect(arguments.paths):
+    stopped = None
+    state = _trap_interrupts()
+    try:
+        failed = _rewrite_all(paths, arguments, generate, totals)
+    except KeyboardInterrupt:
+        stopped = 128 + (state["signal"] or signal.SIGINT)
+        print(
+            f"interrupted: {signal.Signals(state['signal'] or signal.SIGINT).name}, "
+            f"stopped after {totals['files']} of {len(paths)} files, "
+            f"{totals['written']} written",
+            file=sys.stderr,
+        )
+    except BrokenPipeError:
+        _silence_stdout()
+        stopped = PIPE_STATUS
+    finally:
+        _restore_interrupts(state)
+
+    print(_totals_line(totals), file=sys.stderr)
+    if stopped is not None:
+        return stopped
+    return 1 if failed else 0
+
+
+def _rewrite_all(paths, arguments, generate, totals) -> bool:
+    """Rewrite each path in turn; return True if any of them could not be handled.
+
+    Interrupts are deliberately not caught here: they unwind through this
+    function, and nothing has been written for the file in flight, so the run
+    stops with every file either rewritten whole or untouched.
+    """
+    failed = False
+    for path in paths:
         if not path.is_file():
             print(f"{path}: no such file", file=sys.stderr)
             failed = True
@@ -62,6 +109,7 @@ def main(argv=None, *, generate=None) -> int:
             print(diff, end="" if diff.endswith("\n") else "\n")
         if arguments.write and result.rewritten != source:
             _write_atomically(path, result.rewritten)
+            totals["written"] += 1
 
         print(
             f"{path}: {len(result.applied)} rewritten, "
@@ -70,14 +118,15 @@ def main(argv=None, *, generate=None) -> int:
         )
         for number, reason in result.unrewritten:
             print(f"{path}: comment {number} kept: {reason}", file=sys.stderr)
+    return failed
 
-    print(
+
+def _totals_line(totals) -> str:
+    return (
         f"{totals['files']} files, {totals['rewritten']} comments rewritten, "
         f"{totals['skipped']} skipped, {totals['kept']} kept, "
-        f"{totals['requests']} requests",
-        file=sys.stderr,
+        f"{totals['requests']} requests"
     )
-    return 1 if failed else 0
 
 
 def codex_generator(model: str = DEFAULT_MODEL):
@@ -109,6 +158,55 @@ def _progress_note(generate) -> str:
     """
     target = getattr(generate, "description", None)
     return f"asking {target}" if target else "rewriting"
+
+
+PIPE_STATUS = 141  # what a shell reports for a process whose reader closed the pipe
+
+
+def _trap_interrupts() -> dict:
+    """Turn SIGINT, SIGTERM and SIGHUP into a KeyboardInterrupt at the current point.
+
+    A signal arrives between two bytecode instructions, so it unwinds the run
+    exactly where it landed: between files, or inside one — where the write is
+    atomic anyway. The first signal is remembered so the exit status can name it;
+    a second one gives up on the summary and leaves at once.
+
+    Signals belong to the main thread, so a caller from a thread gets back a
+    state with nothing installed and keeps its own handlers.
+    """
+    state: dict = {"signal": None, "previous": {}}
+
+    def handle(signum, _frame):
+        if state["signal"] is not None:
+            print("interrupted again: leaving now", file=sys.stderr, flush=True)
+            os._exit(128 + signum)
+            return  # os._exit does not return; this keeps the intent explicit
+        state["signal"] = signum
+        raise KeyboardInterrupt
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            state["previous"][signum] = signal.signal(signum, handle)
+    except ValueError:  # not the main thread: the process' signals are not ours to take
+        return {"signal": None, "previous": {}}
+    return state
+
+
+def _restore_interrupts(state) -> None:
+    """Hand the signals back as they were, so a caller embedding this stays as it was."""
+    for signum, previous in state.get("previous", {}).items():
+        try:
+            signal.signal(signum, previous)
+        except ValueError:  # pragma: no cover - only reachable off the main thread
+            return
+
+
+def _silence_stdout() -> None:
+    """Point stdout at /dev/null, so the interpreter's last flush cannot raise again."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError):
+        pass
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -189,7 +287,10 @@ def _write_atomically(path: Path, data: bytes) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp_name, path)
-    except Exception:
+    except BaseException:
+        # BaseException, not Exception: an interrupt landing between the temporary
+        # file and the move would otherwise leave the temporary file behind, next
+        # to a config file, looking like something that belongs there.
         try:
             os.unlink(temp_name)
         except OSError:

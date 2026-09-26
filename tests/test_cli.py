@@ -8,14 +8,17 @@ tests never touch the network.
 from __future__ import annotations
 
 import io
+import os
+import signal
 import stat
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from commahum.cli import codex_generator, main
+from commahum.cli import _restore_interrupts, _trap_interrupts, codex_generator, main
 from commahum.codex_adapter import DEFAULT_MODEL
 
 
@@ -237,6 +240,136 @@ class CliTests(unittest.TestCase):
             generate = codex_generator("gpt-5.5")
 
         self.assertEqual(generate.description, "Codex subscription · gpt-5.5")
+
+
+class InterruptTests(unittest.TestCase):
+    """Stopping a run must not cost a file. Every file is either rewritten or
+    untouched, the run says how far it got, and the shell learns why it stopped."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def write(self, name: str, text: str) -> Path:
+        path = self.root / name
+        path.write_bytes(text.encode())
+        return path
+
+    def run_cli(self, argv, generate) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(argv, generate=generate)
+        return code, out.getvalue(), err.getvalue()
+
+    def interrupting_generator(self, first_reply: str):
+        """Answers the first file, then interrupts the run from inside the second."""
+        answered = FakeGenerator(first_reply)
+
+        def generate(prompt: str) -> str:
+            if answered.prompts:
+                raise KeyboardInterrupt
+            return answered(prompt)
+
+        return generate
+
+    def test_an_interrupt_stops_before_the_next_file_and_reports_the_progress(self) -> None:
+        first = self.write("a.nix", "# первое\n{ }\n")
+        second = self.write("b.nix", "# второе\n{ }\n")
+
+        code, _, err = self.run_cli(
+            [str(first), str(second)], self.interrupting_generator("[[1]]\nновое\n")
+        )
+
+        self.assertEqual(code, 130)
+        self.assertIn("interrupted: SIGINT, stopped after 1 of 2 files", err)
+        self.assertIn("1 files, 1 comments rewritten", err)
+        self.assertEqual(second.read_bytes(), "# второе\n{ }\n".encode())
+
+    def test_an_interrupted_write_keeps_the_files_it_finished(self) -> None:
+        first = self.write("a.nix", "# первое\n{ }\n")
+        second = self.write("b.nix", "# второе\n{ }\n")
+
+        code, _, err = self.run_cli(
+            ["--write", str(first), str(second)],
+            self.interrupting_generator("[[1]]\nновое\n"),
+        )
+
+        self.assertEqual(code, 130)
+        self.assertIn("1 written", err)
+        self.assertEqual(first.read_bytes(), "# новое\n{ }\n".encode())
+        self.assertEqual(second.read_bytes(), "# второе\n{ }\n".encode())
+
+    def test_termination_and_hang_up_are_treated_like_an_interrupt(self) -> None:
+        path = self.write("home.nix", "# старое\n{ }\n")
+
+        for signum, expected in ((signal.SIGTERM, 143), (signal.SIGHUP, 129)):
+            with self.subTest(signum=signum.name):
+
+                def generate(_prompt: str, signum=signum) -> str:
+                    os.kill(os.getpid(), signum)
+                    raise AssertionError("the signal did not interrupt the run")
+
+                code, _, err = self.run_cli([str(path)], generate)
+
+                self.assertEqual(code, expected)
+                self.assertIn(f"interrupted: {signum.name}", err)
+                self.assertNotIn("Traceback", err)
+
+    def test_a_second_interrupt_leaves_immediately(self) -> None:
+        state = _trap_interrupts()
+        self.addCleanup(_restore_interrupts, state)
+        handler = signal.getsignal(signal.SIGINT)
+
+        with self.assertRaises(KeyboardInterrupt):
+            handler(signal.SIGINT, None)
+        with patch("commahum.cli.os._exit") as exit_now:
+            handler(signal.SIGINT, None)
+
+        exit_now.assert_called_once_with(130)
+
+    def test_a_broken_pipe_ends_the_run_without_a_traceback(self) -> None:
+        path = self.write("home.nix", "# старое\n{ }\n")
+
+        class ClosedPipe(io.StringIO):
+            def write(self, _text: str) -> int:
+                raise BrokenPipeError(32, "Broken pipe")
+
+        err = io.StringIO()
+        with redirect_stdout(ClosedPipe()), redirect_stderr(err):
+            code = main([str(path)], generate=FakeGenerator("[[1]]\nновое\n"))
+
+        self.assertEqual(code, 141)
+        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_an_interrupt_between_the_temp_file_and_the_move_leaves_nothing_behind(
+        self,
+    ) -> None:
+        path = self.write("home.nix", "# старое\n{ }\n")
+        original = path.read_bytes()
+
+        with patch("commahum.cli.os.replace", side_effect=KeyboardInterrupt):
+            code, _, _ = self.run_cli(
+                ["--write", str(path)], FakeGenerator("[[1]]\nновое\n")
+            )
+
+        self.assertEqual(code, 130)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(sorted(self.root.iterdir()), [path])
+
+    def test_no_handlers_are_installed_from_a_thread(self) -> None:
+        """Signals belong to the main thread; a threaded caller keeps its own."""
+        state: list[dict] = []
+
+        def install() -> None:
+            state.append(_trap_interrupts())
+            _restore_interrupts(state[-1])
+
+        thread = threading.Thread(target=install)
+        thread.start()
+        thread.join()
+
+        self.assertEqual(state[0]["previous"], {})
 
 
 if __name__ == "__main__":
