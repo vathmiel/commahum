@@ -36,6 +36,14 @@ hermes = [
   "ruamel.yaml==0.18.16",
   "truststore==0.10.4",
 ]
+# What the vendored humanizer-ru scanner needs (tools/style_report.py). The
+# rewriting itself does not: src/commahum/bans.py reads the ban table with ast,
+# so the package imports none of the skill's code.
+style = [
+  "razdel",
+  "pymorphy3",
+  "pymorphy3-dicts-ru",
+]
 
 [project.scripts]
 commahum = "commahum.cli:main"

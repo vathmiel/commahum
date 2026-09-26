@@ -1,0 +1,25 @@
+{
+  "upstream": "https://github.com/ilyautov/humanizer-ru",
+  "revision": "v3.30.0 (8adece34bf833ef35b247bb46f22be4298f0fa9f)",
+  "license": "MIT (see LICENSE.humanizer-ru, Copyright (c) 2026 Ilya Utov)",
+  "tarball_sha256": "9e7c6358353cd4ffef985b4ae2908fe6d7c3a2145fce764624a878f32ae485ab",
+  "tree": {
+    "path": "vendor/humanizer-ru/",
+    "kind": "verbatim copy of the repository's skill directory, skills/humanizer-ru, taken from the tag's tarball",
+    "files": 19,
+    "what": {
+      "SKILL.md": "the rules: modes, the marking procedure, the HARD BANS table, the fact lock, the verification step",
+      "references/catalog.md": "all 64 patterns with before and after examples",
+      "references/audit.md": "the audit mode: scan, report, change nothing",
+      "references/review.md": "the review gate",
+      "scripts/scan.py": "the deterministic scanner, prints a cleanliness score",
+      "scripts/humanizer_metrics/markers.py": "HARD BANS as name plus regular expression; the table src/commahum/bans.py reads"
+    }
+  },
+  "used_by": [
+    "src/commahum/rewrite.py: the instructions sent with every request encode the procedure, the bans and the fact lock",
+    "src/commahum/bans.py: refuses a rewrite that introduces a hard ban the original did not have",
+    "tests/test_bans.py and tests/test_rewrite.py"
+  ],
+  "note": "The scanner needs razdel and pymorphy3. The rewriting pipeline reads only the ban table, through ast, and imports none of the skill's code."
+}

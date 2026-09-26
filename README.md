@@ -65,9 +65,50 @@ tags, comments made only of URLs or paths, separator lines, and the shebang.
 
 Nothing the model says is ever forced into the file.
 
+## Style policy: humanizer-ru
+
+What "reads well" means here is not this project's invention. The rules come from
+[humanizer-ru](https://github.com/ilyautov/humanizer-ru), vendored at tag v3.30.0
+under `vendor/humanizer-ru/` with its provenance in `MANIFEST.json` and its MIT
+notice beside it. The instructions sent with every request carry the skill's
+procedure: edit locally instead of rewriting, remove the shell rather than add
+voice, its HARD BANS table, and the fact lock that outranks every style rule.
+
+The bans are not only prose in a prompt. `src/commahum/bans.py` reads the
+`HARD_BANS` table out of the vendored `markers.py` — through `ast`, so the
+scanner's razdel and pymorphy3 stay out of the dependency graph — and the
+rewriting refuses a body that *introduces* one. A comment that already said
+«является» keeps it: the guard polices the rewrite, not the author. A refusal
+costs the usual single retry, then the original comment stays and the run names
+the ban it brought in.
+
+Removing what was already there is left to the model, so "did it work" is a
+measurement rather than a claim. `tools/style_report.py` hands the before and
+after prose to the skill's own scanner:
+
+```sh
+.venv/bin/python tools/style_report.py --provider deepseek file.nix
+```
+
+```text
+ЧИСТОТА: было 17, стало 88/100  [чисто]
+HARD BANS:
+  ⛔ Комплексный подход/решение ×1 (стр. 2)
+Ритм / типографика:
+  ⚠ ровный ритм (CV=0.0, цель ≥0.45); ✓ тире чисто
+Факт-замок (против before.txt):
+  ✓ факт-замок цел: 21 фактов исходника перенесено, новых нет
+```
+
+The leftover ban in that run was in the original and the model kept it; the
+guard deliberately does not police removal, because their own catalogue warns
+that a term or a formal register can make a marker the right thing to write. The
+scanner reports it, and that is the honest division: the pipeline enforces, the
+scanner measures.
+
 ## Status
 
-Working end to end. 115 unit tests (stdlib `unittest`, no network) plus an
+Working end to end. 144 unit tests (stdlib `unittest`, no network) plus an
 invariant check over a real config tree:
 
 ```sh
@@ -97,6 +138,12 @@ the parser rather than asserted.
       guarded by `tests/test_vendor_tree.py`
 - [x] any of its providers can drive the rewriting: `--provider deepseek` asks
       DeepSeek's own endpoint through that layer
+- [x] the style rules are vendored from humanizer-ru, and the instructions sent
+      with every request carry its procedure, its hard bans and its fact lock
+- [x] a rewrite that introduces a hard ban is refused, retried once, then
+      reported — the ban table is read out of the vendored skill
+- [x] compliance is measurable: the skill's own scanner grades before and after
+      (`tools/style_report.py`), including the fact lock
 
 ## Usage
 
@@ -201,12 +248,15 @@ src/commahum/diff.py          unified diff of original vs rewritten
 src/commahum/codex_adapter.py Codex subscription request + OAuth token rotation
 src/commahum/hermes_provider.py prompt -> text through the vendored provider layer
 src/commahum/hermes_tree.py   where that tree lives, and loading it fail-closed
+src/commahum/bans.py          the hard-ban guard, reading the vendored rule table
 src/commahum/cli.py           the command line
 examples/selfcheck.py         invariant check over any Nix tree
 examples/smoke_codex.py       live request smoke test for the adapter
 tests/                        unit tests (stdlib unittest)
 vendor/hermes/                Hermes provider layer (see "Provider integrations")
+vendor/humanizer-ru/          the style rules (see "Style policy: humanizer-ru")
 tools/closure_probe.py        closure check and repair for the vendored tree
+tools/style_report.py         before/after grading with the vendored scanner
 spikes/001-codex-vendor/      provenance for the adapter (manifest, MIT notice)
 ```
 

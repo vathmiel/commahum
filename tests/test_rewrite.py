@@ -187,6 +187,43 @@ class RewriteSourceTests(unittest.TestCase):
 
         self.assertIsInstance(result, RewriteResult)
 
+    def test_refuses_a_rewrite_that_brings_in_a_hard_ban_and_retries_it(self) -> None:
+        source = "# 16 ГиБ ОЗУ, гибернация не объявлена\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nОЗУ — 16 ГиБ\n",  # the dash the original never had
+            "[[1]]\nОЗУ 16 ГиБ\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, "# ОЗУ 16 ГиБ\n{}\n".encode())
+        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.requests, 2)
+
+    def test_keeps_the_original_when_the_ban_comes_back_again(self) -> None:
+        source = "# сборка идёт\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nстоит отметить, что сборка идёт\n",
+            "[[1]]\nважно отметить: сборка идёт\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, source)
+        self.assertEqual(
+            result.unrewritten,
+            ((1, "adds a hard ban: Важно понимать/помнить/отметить, что"),),
+        )
+
+    def test_a_ban_the_original_already_had_is_left_to_the_model(self) -> None:
+        source = "# данный файл описывает swap\n{}\n".encode()
+        generator = FakeGenerator("[[1]]\nданный файл описывает swap\n")
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.unrewritten, ())
+
 
 if __name__ == "__main__":
     unittest.main()
