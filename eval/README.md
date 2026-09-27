@@ -1,9 +1,9 @@
 # The frozen corpus
 
 Five small files, each one put there to make a different part of the flow fail
-loudly if it breaks. They are frozen: a baseline is only comparable to a run over
-the same files, and `commahum measure` says so instead of quietly passing when the
-file count changes.
+loudly if it breaks. They are frozen: a baseline records each path and the SHA256
+of its original bytes, not just a file count, and `commahum measure` refuses to
+compare a different corpus even when it contains the same number of files.
 
 | File | What it exercises |
 |---|---|
@@ -27,8 +27,10 @@ from; `commahum auth --store <provider>` puts one there without pi's TUI.
 
 The first prints the numbers; the second compares them with the recorded baseline
 and exits 1 on a regression — a lower score, a hard ban that appeared, a fact that
-was lost or invented — and 2 when the two runs are not comparable (different file
-count, different model).
+was lost or invented, in the whole corpus or any one file — and 2 when the two
+runs are not comparable (different paths or hashes, different model, or an old
+baseline without complete per-file results). Per-file results take one additional
+scanner run per file, but no additional requests to the model.
 
 `--save eval/baseline.json` re-records it. Do that only when the change was meant to
 move the numbers, and say why in the commit message: a baseline that is silently

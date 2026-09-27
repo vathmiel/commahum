@@ -63,7 +63,12 @@ tags, comments made only of URLs or paths, separator lines, and the shebang.
 4. Anything that fails is retried once on its own. If it fails again the comment
    keeps its original text and the run reports it.
 
-Nothing the model says is ever forced into the file.
+Nothing the model says is ever forced into the file. Rewrites also pass a
+conservative check for technical values in the original prose: paths, URLs,
+addresses and digit-bearing tokens such as ports and versions must survive
+unchanged. A failed check gets one retry, then keeps the original comment. This
+is not a proof that the new wording is factually correct; facts expressed only
+in ordinary prose still need human review.
 
 ## Style policy: humanizer-ru
 
@@ -195,11 +200,14 @@ no regressions against eval/baseline.json
 ```
 
 A lower score, a hard ban that appeared, a fact lost or invented: any of those is a
-regression, and so is exit 1. A baseline taken over a different number of files or
-against a different model is not comparable, and saying that is exit 2 rather than a
-quiet pass. `eval/` holds the frozen corpus and the recorded baseline; `--save`
-re-records it, which should be a deliberate act with a reason, not a reflex after a
-red run.
+regression, for the corpus or for an individual file, and yields exit 1. Each
+baseline record contains a file path, SHA256 of the original bytes and its own
+scanner numbers, so a rename or edit cannot pass unnoticed when the file count
+stays the same. Different files or a different model mean exit 2 (not comparable),
+as does an older baseline without complete per-file numbers. `eval/` holds the
+frozen corpus and its baseline; `--save` re-records it deliberately, not as a
+reflex after a red run. Per-file grading costs one additional scanner invocation
+per file; it does not make an additional model request.
 
 ## Authorizing a provider
 
@@ -240,12 +248,13 @@ pi, whose `/login` runs that flow and keeps refreshing its tokens afterwards.
 
 ## Status
 
-Working end to end. 238 unit tests (stdlib `unittest`, no network) plus an
-invariant check over a real config tree and a live probe of the skill wiring:
+Working end to end. 328 unit and packaging tests (stdlib `unittest`; the
+isolated wheel install fetches dependencies from the package index), a clean
+wheel/sdist install smoke, and a no-model invariant check:
 
 ```sh
-.venv/bin/commahum check /etc/nixos --quiet
-# 39 files, 1131 comments rewritten, 0 invariant violations
+.venv/bin/commahum check eval/corpus --quiet
+# 5 files, 20 comments rewritten, 0 invariant violations
 ```
 
 `commahum check` swaps the model for a stand-in (uppercase), splices, re-parses
@@ -266,9 +275,12 @@ the parser rather than asserted.
 - [x] interrupts — Ctrl+C, `SIGTERM`, `SIGHUP`, a reader that closed the pipe —
       stop the run between files, name the signal in the exit status, and leave
       neither a half-written file nor a temporary file behind
-- [x] the model call goes through pi, vendored in `vendor/pi/`, so a checkout
-      needs nothing installed beyond node: the runner spawns
-      `node vendor/pi/dist/bundle/cli.js`
+- [x] the model call goes through pi, vendored in `vendor/pi/` in a checkout and
+      `commahum/_vendor/pi/` in a wheel; the runner finds the bundled entry point
+      and runs it with node
+- [x] wheel and sdist carry both vendored trees; a wheel installed in a separate
+      virtualenv reads its skill, ban table and pi from site-packages and passes
+      `commahum check` without the source checkout
 - [x] pi is asked hermetically — no tools, no session, no `AGENTS.md`, no skills,
       no extensions, no prompt templates — and the prose travels on stdin, never
       in the process table
@@ -290,13 +302,18 @@ the parser rather than asserted.
       tag's tarball (`tests/test_skill.py`)
 - [x] a rewrite that introduces a hard ban is refused, retried once, then
       reported — the ban table is read out of the vendored skill
+- [x] a rewrite that loses, invents or changes a recognizable technical value
+      (path, URL, address, number) is retried and otherwise kept unchanged;
+      ordinary prose facts are not claimed to be verified
+- [x] `--write` re-reads the file after the model request and skips it if its
+      bytes changed or it vanished, rather than overwriting the newer version
 - [x] compliance is measurable: the skill's own scanner grades before and after
       (`commahum report`), including the fact lock
 - [x] the wiring itself is checkable against a live provider: `commahum probe`
       asks questions only the skill's files can answer
-- [x] a change is judged by numbers: `commahum measure` runs a frozen corpus,
-      records the metrics as a baseline and calls a lower score, a new ban or a
-      moved fact a regression — two runs of the same corpus agreed exactly
+- [x] a change is judged by numbers: `commahum measure` records a frozen
+      corpus by path and SHA256, checks scanner metrics per file and as a whole,
+      and rejects regressions and incomparable baselines separately
 - [x] what pi will answer with is one command: `commahum auth` names the provider,
       the credential's kind, and whether it came out of pi's store or the shell
 - [x] the one thing pi does not say — where the credential came from — is computed
@@ -374,8 +391,13 @@ between files: every file is either rewritten whole or left as it was — the ne
 bytes go to a temporary file and are moved into place with one `os.replace` —
 the summary says how far the run got, and the exit status names the signal
 (130 for Ctrl+C, 143 for `SIGTERM`, 129 for `SIGHUP`, 141 for a closed pipe). A
-second Ctrl+C leaves at once. A run that cannot start at all — no node, no pi —
-is 2, with a sentence rather than a traceback.
+second Ctrl+C leaves at once. Before replacing a file, `--write` compares its
+current bytes with the bytes read before the model request: if they changed or
+the file vanished, it skips that file, reports it and exits 1 after handling the
+rest. This closes the long model-request window, not the tiny race between that
+last read and `os.replace`; it is not an atomic compare-and-swap. A run that
+cannot start at all — no node, no pi — is 2, with a sentence rather than a
+traceback.
 
 ```sh
 $ commahum --provider deepseek /etc/nixos/modules
@@ -395,17 +417,22 @@ API keys, the OAuth grants for subscription plans and the retries. What stays
 here is the request: the rules, the numbered prose, and the answer parsed back
 into comments.
 
-pi is vendored in `vendor/pi/` — 0.87.1, MIT, `MANIFEST.json` beside it with the
-provenance and the subtree hashes, the notice in `LICENSE.pi`. It is the
-published package minus the parts our path never runs: the source maps, the 91
-npm packages the bundle inlines, `docs/` and `examples/`. What is left — `dist/`,
-the three packages the bundle imports at runtime, `package.json` and
-`npm-shrinkwrap.json` — is 15.9 MB, byte-identical to the package it came from.
+pi is vendored in `vendor/pi/` in a checkout — 0.87.1, MIT, `MANIFEST.json`
+beside it with the provenance and the subtree hashes, the notice in
+`LICENSE.pi`. Installed wheels carry the same bytes under
+`commahum/_vendor/pi/`, alongside the installed humanizer-ru skill under
+`commahum/_vendor/humanizer-ru/`. An sdist includes both trees and builds the
+same wheel. Neither distribution depends on having this checkout on disk.
+It is the published pi package minus the parts our path never runs: the source
+maps, the 91 npm packages the bundle inlines, `docs/` and `examples/`. What
+is left — `dist/`, the three packages the bundle imports at runtime,
+`package.json` and `npm-shrinkwrap.json` — is 15.9 MB, byte-identical to the
+package it came from.
 
-Running it needs only node (>= 22.19.0, pi's own `engines`), because the runner
-spawns `node vendor/pi/dist/bundle/cli.js`. The order is `$COMMAHUM_PI`, then the
-vendored copy, then a `pi` from `PATH`: a checkout works with nothing installed,
-and a host or nix-store installation takes over with one variable.
+Running the bundled pi needs node (>= 22.19.0, pi's own `engines`): the
+runner spawns the `cli.js` in the vendored tree of this checkout or installed
+package. The order is `$COMMAHUM_PI`, then that vendored copy, then a `pi`
+from `PATH`; no separate pi installation is needed.
 
 Inside a run pi is switched off in every way that matters:
 
@@ -480,11 +507,13 @@ fixed, 0 of 6 runs could quote a token only that file contained; after, 6 of 6
 could, and 3 of 3 obeyed a rule written into the same file.
 
 This project relies on the first form — `--skill`, explicit, no installation —
-and hands pi the skill by absolute path on every request. The symlink is for a
-human's own pi sessions on a machine where this checkout lives; a run of
-`commahum` does not need it and does not read anything from the home directory.
-With discovery off, a skill installed under the same name elsewhere cannot shadow
-the pinned copy: what a run loads is the one this checkout carries.
+and hands pi the skill by absolute path on every request. In a checkout that
+path is `vendor/humanizer-ru/`; in a wheel it is the copy shipped inside the
+installed package. The symlink is for a human's own pi sessions on a machine
+where this checkout lives; a run of `commahum` does not need it and does not
+read anything from the home directory. With discovery off, a skill installed
+under the same name elsewhere cannot shadow the copy that came with this
+installation.
 
 ## Layout
 
@@ -528,10 +557,12 @@ LICENSE.hermes`) and is no longer in the tree, though it stays in the history.
 
 ```sh
 python -m venv .venv
-.venv/bin/python -m pip install -e '.[style]'
+.venv/bin/python -m pip install -e '.[style]' hatchling
 .venv/bin/python -m unittest discover -s tests -t . -v
 ```
 
-`[style]` is only for `commahum report` and `commahum measure`, which grade prose
-with the vendored scanner. The rewriting path needs nothing beyond the parser: the model
-is reached by running the vendored pi with node.
+`hatchling` builds the wheel and sdist in `tests/test_packaging.py`; its isolated
+install test downloads runtime dependencies into a fresh virtualenv. Node is
+needed for the bundled pi smoke test. `[style]` is only for `commahum report`
+and `commahum measure`, which grade prose with the vendored scanner. A plain
+rewrite needs only the parser and node for the bundled pi.
