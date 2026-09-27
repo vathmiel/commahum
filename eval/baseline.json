@@ -1,6 +1,6 @@
 {
   "files": 5,
-  "requests": 5,
+  "requests": 6,
   "applied": 17,
   "skipped": 3,
   "kept": 0,
@@ -11,5 +11,82 @@
   "facts_kept": 16,
   "facts_new": 0,
   "facts_lost": 0,
-  "model": "pi · deepseek/deepseek-flash · humanizer-ru"
+  "model": "pi · deepseek/deepseek-flash · humanizer-ru",
+  "corpus": [
+    {
+      "path": "eval/corpus/already-good.nix",
+      "sha256": "8c50ff0c67519c745d97f2c811c78738e9cf1b1a92cd215f2d24aa4d93cad66d",
+      "requests": 2,
+      "applied": 3,
+      "skipped": 0,
+      "kept": 0,
+      "score_before": 100,
+      "score_after": 100,
+      "bans": 0,
+      "markers": 0,
+      "facts_kept": 1,
+      "facts_new": 0,
+      "facts_lost": 0
+    },
+    {
+      "path": "eval/corpus/cancelerit.nix",
+      "sha256": "6049447c2fe536b4d9c09f75480ac48bd11a8a8082547abd3e7b6515e50ba64e",
+      "requests": 1,
+      "applied": 6,
+      "skipped": 0,
+      "kept": 0,
+      "score_before": 29,
+      "score_after": 68,
+      "bans": 0,
+      "markers": 2,
+      "facts_kept": 0,
+      "facts_new": 0,
+      "facts_lost": 0
+    },
+    {
+      "path": "eval/corpus/english.nix",
+      "sha256": "903cbebc7d9e8d5091183b013c612ee8c4739a0b2b63c76229055de91e26cf15",
+      "requests": 1,
+      "applied": 1,
+      "skipped": 0,
+      "kept": 0,
+      "score_before": 100,
+      "score_after": 100,
+      "bans": 0,
+      "markers": 0,
+      "facts_kept": 1,
+      "facts_new": 0,
+      "facts_lost": 0
+    },
+    {
+      "path": "eval/corpus/facts.nix",
+      "sha256": "e71bcf6dbd067ccffed94f194a48759146d1f3000f661bd4cf024c7e8e0caed2",
+      "requests": 1,
+      "applied": 4,
+      "skipped": 0,
+      "kept": 0,
+      "score_before": 81,
+      "score_after": 81,
+      "bans": 0,
+      "markers": 0,
+      "facts_kept": 12,
+      "facts_new": 0,
+      "facts_lost": 0
+    },
+    {
+      "path": "eval/corpus/skipped.nix",
+      "sha256": "fd738670605e8c3d11051b6c4248753d022d749d1b92e2c15dcf1028b8be69dc",
+      "requests": 1,
+      "applied": 3,
+      "skipped": 3,
+      "kept": 0,
+      "score_before": 100,
+      "score_after": 100,
+      "bans": 0,
+      "markers": 0,
+      "facts_kept": 2,
+      "facts_new": 0,
+      "facts_lost": 0
+    }
+  ]
 }
