@@ -15,6 +15,10 @@ Stopping is safe too. Ctrl+C, a termination signal or a reader that closed the p
 end the run between files; each file is either rewritten whole or left alone; the
 summary says how far the run got.
 
+A file that changes under the run is not clobbered either. It is re-read
+immediately before the write, and one that no longer matches what the rewrite was
+computed from is reported and left alone, while the run goes on to the rest.
+
 The rules are the vendored skill's, and every request loads it. A skill that is
 missing or unreadable stops the run before any file is touched: rewriting comments
 with no rules to follow would be inventing them.
@@ -163,6 +167,10 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
     Interrupts are deliberately not caught here: they unwind through this
     function, and nothing has been written for the file in flight, so the run
     stops with every file either rewritten whole or untouched.
+
+    A file that is no longer what was read — changed, or gone — is reported and
+    left alone rather than written: clobbering the newer contents would be worse
+    than one file less rewritten, and the run goes on to the rest.
     """
     failed = False
     for path in paths:
@@ -190,8 +198,13 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
         if diff:
             print(diff, end="" if diff.endswith("\n") else "\n")
         if arguments.write and result.rewritten != source:
-            _write_atomically(path, result.rewritten)
-            totals["written"] += 1
+            try:
+                _write_atomically(path, result.rewritten, expected=source)
+            except StaleFileError as stale:
+                print(f"{path}: {stale}, not written", file=sys.stderr)
+                failed = True
+            else:
+                totals["written"] += 1
 
         print(
             f"{path}: {len(result.applied)} rewritten, "
@@ -222,15 +235,33 @@ def _progress_note(generate) -> str:
     return f"asking {target}" if target else "rewriting"
 
 
-def _write_atomically(path, data: bytes) -> None:
+class StaleFileError(Exception):
+    """The file on disk is no longer the one the rewrite was computed from."""
+
+
+def _write_atomically(path, data: bytes, *, expected: bytes) -> None:
     """Replace ``path`` with ``data`` in one step, keeping its mode.
 
     A config file caught halfway through a write is worse than one that was not
     rewritten at all, so the new bytes go to a temporary file first and are moved
     into place with a single ``os.replace``. A reader sees either the old file or
     the new one, never a truncated one.
+
+    ``expected`` is the content the rewrite was computed from. It is re-read
+    immediately before the move, and a file that no longer matches — or that can
+    no longer be read — is left alone and reported as stale instead of being
+    replaced. The comparison is on the bytes, so a concurrent save that changes
+    no byte is not a conflict: there is nothing there to lose.
+
+    This narrows the race, it does not close it: the re-read and the move are
+    still two steps, and an edit landing in the sliver between them is still
+    overwritten. There is no compare-and-swap here to claim — what the re-read
+    buys is the wide window, the model request, where a save is likely to land.
     """
-    mode = stat.S_IMODE(path.stat().st_mode)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        raise StaleFileError("gone since it was read") from None
     handle, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         os.fchmod(handle, mode)
@@ -238,6 +269,12 @@ def _write_atomically(path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
+        try:
+            current = path.read_bytes()
+        except OSError:
+            raise StaleFileError("gone since it was read") from None
+        if current != expected:
+            raise StaleFileError("changed since it was read")
         os.replace(temp_name, path)
     except BaseException:
         # BaseException, not Exception: an interrupt landing between the temporary

@@ -13,6 +13,7 @@ import signal
 import stat
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -310,6 +311,171 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("rewriting", err)
         self.assertIn("1 rewritten", err)
         self.assertIn("+# новое", out)
+
+
+class WriteConflictTests(unittest.TestCase):
+    """A rewrite must not land on a file that changed while the model was asked.
+
+    The read and the write are separated by a model request, which can take a
+    while, and an editor or another tool can save the file in that window. When
+    the file on disk is no longer what the rewrite was computed from, the write
+    is refused and reported: clobbering the other change would be worse than
+    leaving this file un-rewritten, and a run over many files goes on.
+    """
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def write(self, name: str, text: str) -> Path:
+        path = self.root / name
+        path.write_bytes(text.encode())
+        return path
+
+    def run_cli(self, argv, generate) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(argv, generate=generate)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_file_that_changed_while_its_rewrite_was_in_flight_is_left_alone(self) -> None:
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        path.chmod(0o640)
+        edited = "# чужое\n{ x = 2; }\n"
+
+        def generate(_prompt: str) -> str:
+            path.write_bytes(edited.encode())  # another tool saves the file mid-request
+            return "[[1]]\nновое\n"
+
+        code, out, err = self.run_cli(["--write", str(path)], generate)
+
+        self.assertEqual(code, 1)
+        self.assertIn(f"{path}: changed since it was read, not written", err)
+        self.assertIn("-# старое", out)  # the rewrite is still shown, just not applied
+        self.assertIn("+# новое", out)
+        self.assertEqual(path.read_bytes(), edited.encode())
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
+        self.assertEqual(sorted(item.name for item in self.root.iterdir()), ["home.nix"])
+
+    def test_a_conflict_does_not_stop_the_files_after_it(self) -> None:
+        """One file the run refuses to write must not cost the others.
+
+        The refusal is per file: the run reports it, keeps going, and ends with
+        the non-zero status the failure deserves.
+        """
+        edited = "# чужое\n{ x = 1; }\n"
+        conflicted = self.write("a.nix", "# первое\n{ x = 1; }\n")
+        later = self.write("b.nix", "# второе\n{ x = 2; }\n")
+
+        def generate(prompt: str) -> str:
+            if "первое" in prompt:
+                conflicted.write_bytes(edited.encode())  # a save lands mid-request
+            return "[[1]]\nНОВОЕ\n"
+
+        code, _, err = self.run_cli(["--write", str(conflicted), str(later)], generate)
+
+        self.assertEqual(code, 1)
+        self.assertIn(f"{conflicted}: changed since it was read, not written", err)
+        self.assertEqual(conflicted.read_bytes(), edited.encode())
+        self.assertIn(f"{later}: 1 rewritten", err)
+        self.assertEqual(later.read_bytes(), "# НОВОЕ\n{ x = 2; }\n".encode())
+        self.assertEqual(sorted(item.name for item in self.root.iterdir()), ["a.nix", "b.nix"])
+
+    def test_a_concurrent_save_with_the_same_bytes_is_not_a_conflict(self) -> None:
+        """The check is on the content, not on the timestamps.
+
+        An editor that saves the file without changing a byte — or a tool that
+        rewrites it identically — leaves nothing to lose: the bytes on disk are
+        exactly the ones the rewrite was computed from, so the rewrite lands.
+        """
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+
+        def generate(_prompt: str) -> str:
+            path.write_bytes(path.read_bytes())  # a save that changes no byte
+            os.utime(path, ns=(time.time_ns() + 1_000_000_000, time.time_ns() + 1_000_000_000))
+            return "[[1]]\nновое\n"
+
+        code, _, err = self.run_cli(["--write", str(path)], generate)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("not written", err)
+        self.assertEqual(path.read_bytes(), "# новое\n{ x = 1; }\n".encode())
+
+    def test_an_interrupt_while_the_file_is_re_read_before_the_move_leaves_nothing_behind(
+        self,
+    ) -> None:
+        """The check gives the interrupt one more place to land, and it is safe.
+
+        The temporary file is already written when the file is re-read, so an
+        interrupt here must cost neither the original nor leave debris next to it.
+        """
+        path = self.write("home.nix", "# старое\n{ } \n")
+        original = path.read_bytes()
+        real_read_bytes = Path.read_bytes
+        armed = {"yes": False}
+
+        def generate(_prompt: str) -> str:
+            armed["yes"] = True
+            return "[[1]]\nновое\n"
+
+        def read_bytes(self):
+            if armed["yes"] and self == path:
+                raise KeyboardInterrupt
+            return real_read_bytes(self)
+
+        with patch.object(Path, "read_bytes", read_bytes):
+            code, _, _ = self.run_cli(["--write", str(path)], generate)
+
+        self.assertEqual(code, 130)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(sorted(self.root.iterdir()), [path])
+
+    def test_a_file_that_vanished_while_it_was_rewritten_is_not_recreated(self) -> None:
+        """A file that is gone is not a file to write: fail closed and report it.
+
+        Writing anyway would resurrect a file someone else just deleted, and
+        crashing on it would be a worse answer than saying what happened.
+        """
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+
+        def generate(_prompt: str) -> str:
+            path.unlink()  # another process removes the file mid-request
+            return "[[1]]\nновое\n"
+
+        code, _, err = self.run_cli(["--write", str(path)], generate)
+
+        self.assertEqual(code, 1)
+        self.assertIn(f"{path}: gone since it was read, not written", err)
+        self.assertFalse(path.exists())
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_a_file_that_vanishes_between_the_reads_is_not_written(self) -> None:
+        """A file can also vanish after its mode was read.
+
+        The re-read before the move finds it gone, refuses the write the same
+        way, and takes the temporary file with it.
+        """
+        path = self.write("home.nix", "# старое\n{ x = 1; }\n")
+        real_read_bytes = Path.read_bytes
+        armed = {"yes": False}
+
+        def generate(_prompt: str) -> str:
+            armed["yes"] = True
+            return "[[1]]\nновое\n"
+
+        def read_bytes(self):
+            if armed["yes"] and self == path:
+                self.unlink()
+            return real_read_bytes(self)
+
+        with patch.object(Path, "read_bytes", read_bytes):
+            code, _, err = self.run_cli(["--write", str(path)], generate)
+
+        self.assertEqual(code, 1)
+        self.assertIn(f"{path}: gone since it was read, not written", err)
+        self.assertFalse(path.exists())
+        self.assertEqual(list(self.root.iterdir()), [])
 
 
 class InterruptTests(unittest.TestCase):
