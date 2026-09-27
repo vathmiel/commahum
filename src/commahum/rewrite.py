@@ -6,7 +6,9 @@ prose. The assembly and the splice stay on this side of the line, and every
 returned body has to pass the patcher's rules before it lands in the file.
 
 A body that fails is retried once on its own, and if it fails again the comment
-keeps its original text. Nothing is ever forced in.
+keeps its original text. Nothing is ever forced in. A body that drops, changes
+or invents a technical value — a path, a link, a host, a number — fails the same
+way: the fact lock is enforced here, not only graded afterwards.
 
 The rules the model follows are the vendored skill's, not this file's: every
 request opens with the skill's invocation line, and the skill's own text arrives
@@ -22,6 +24,7 @@ from .bans import introduced_bans
 from .comments import CommentError, CommentSpan
 from .patch import Rewrite, apply_rewrites
 from .selection import Candidate, select_candidates
+from .values import value_drift
 
 __all__ = ["INSTRUCTIONS", "RewriteResult", "build_request", "parse_reply", "rewrite_source"]
 
@@ -40,6 +43,9 @@ INSTRUCTIONS = """\
 
 Конструкции из таблицы запретов не должны появляться там, где их не было: \
 внесённый запрет отменяет правку целиком, это проверяется машинно.
+
+Пути, ссылки и числа сверяются с исходником так же машинно: правка, которая их \
+теряет, меняет или добавляет, отменяется целиком.
 
 Как отвечать:
 строка [[N]] открывает комментарий с номером N;
@@ -150,6 +156,15 @@ def rewrite_source(source: bytes, generate, *, invocation: str | None = None) ->
                 apply_rewrites(source, [Rewrite(item.span, comment)])
             except (CommentError, TypeError) as error:
                 still_pending.append((number, item, str(error)))
+                continue
+            drift = value_drift(
+                item.body.decode("utf-8", "surrogateescape"),
+                body.decode("utf-8", "surrogateescape"),
+            )
+            if drift:
+                still_pending.append(
+                    (number, item, "changes technical values: " + ", ".join(drift))
+                )
                 continue
             added = introduced_bans(
                 item.span.text.decode("utf-8", "surrogateescape"),

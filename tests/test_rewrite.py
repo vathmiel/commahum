@@ -238,5 +238,186 @@ class RewriteSourceTests(unittest.TestCase):
         self.assertEqual(result.unrewritten, ())
 
 
+class TechnicalValueTests(unittest.TestCase):
+    """A rewrite may not drop, change or invent a technical value.
+
+    Paths, links, hosts and digit-bearing tokens are compared between the old
+    body and the new one — the fact lock is enforced here, not merely graded
+    afterwards. A drifting body costs the usual retry, and a drifting retry
+    leaves the original text standing and names the value. Ordinary prose with
+    hyphens, inflections and a reordered clause must not be refused.
+    """
+
+    def test_a_rewrite_that_keeps_every_value_is_applied_without_a_retry(self) -> None:
+        source = "# Сервер слушает порт 8384, конфиг в /etc/nixos\n{}\n".encode()
+        generator = FakeGenerator("[[1]]\nКонфиг лежит в /etc/nixos, порт 8384 слушает сервер\n")
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(
+            result.rewritten,
+            "# Конфиг лежит в /etc/nixos, порт 8384 слушает сервер\n{}\n".encode(),
+        )
+        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.unrewritten, ())
+        self.assertEqual(result.requests, 1)
+
+    def test_a_changed_port_is_refused_and_retried(self) -> None:
+        source = "# Сервер слушает порт 8384\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nСервер слушает порт 8080\n",
+            "[[1]]\nПорт 8384 слушает сервер\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, "# Порт 8384 слушает сервер\n{}\n".encode())
+        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.unrewritten, ())
+        self.assertEqual(result.requests, 2)
+
+    def test_a_value_the_original_never_had_keeps_it_out_of_the_file(self) -> None:
+        source = "# Сборка идёт без ограничений\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nСборка занимает 30 минут\n",
+            "[[1]]\nСборка занимает 30 минут, ограничений нет\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, source)
+        self.assertEqual(result.applied, ())
+        self.assertEqual(
+            result.unrewritten,
+            ((1, "changes technical values: gained 30"),),
+        )
+        self.assertEqual(result.requests, 2)
+
+    def test_a_lost_path_keeps_the_original_and_names_it(self) -> None:
+        source = "# Конфиг лежит в /etc/nixos\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nКонфиг лежит где-то\n",
+            "[[1]]\nКонфиг лежит в другом месте\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, source)
+        self.assertEqual(
+            result.unrewritten,
+            ((1, "changes technical values: lost /etc/nixos"),),
+        )
+
+    def test_an_extensionless_relative_path_change_is_retried_then_refused(self) -> None:
+        source = "# Бандл в vendor/pi\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nБандл в vendor/node\n",
+            "[[1]]\nБандл теперь в vendor/node\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, source)
+        self.assertEqual(result.applied, ())
+        self.assertEqual(result.requests, 2)
+        self.assertEqual(
+            result.unrewritten,
+            ((1, "changes technical values: lost vendor/pi, gained vendor/node"),),
+        )
+
+    def test_a_multisegment_host_path_change_is_retried_then_refused(self) -> None:
+        for old, new in (
+            ("example.com/api/login", "example.com/api/admin"),
+            ("example.com/api/@login", "example.com/api/@admin"),
+        ):
+            with self.subTest(old=old):
+                source = f"# Узел {old}\n{{}}\n".encode()
+                generator = FakeGenerator(
+                    f"[[1]]\nУзел {new}\n",
+                    f"[[1]]\nНужный узел {new}\n",
+                )
+
+                result = rewrite_source(source, generator)
+
+                self.assertEqual(result.rewritten, source)
+                self.assertEqual(result.applied, ())
+                self.assertEqual(result.requests, 2)
+                self.assertEqual(
+                    result.unrewritten,
+                    ((1, f"changes technical values: lost {old}, gained {new}"),),
+                )
+
+    def test_a_removed_url_query_mark_is_retried_then_refused(self) -> None:
+        source = "# Адрес https://example.com/api?\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nАдрес https://example.com/api\n",
+            "[[1]]\nНужный адрес https://example.com/api\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, source)
+        self.assertEqual(result.applied, ())
+        self.assertEqual(result.requests, 2)
+        self.assertEqual(
+            result.unrewritten,
+            (
+                (1, "changes technical values: lost https://example.com/api?, "
+                    "gained https://example.com/api"),
+            ),
+        )
+
+    def test_a_changed_version_names_both_sides(self) -> None:
+        source = "# Собрано под Python 3.11\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nСобрано под Python 3.12\n",
+            "[[1]]\nСборка под Python 3.12\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, source)
+        self.assertEqual(
+            result.unrewritten,
+            ((1, "changes technical values: lost 3.11, gained 3.12"),),
+        )
+
+    def test_ordinary_prose_with_hyphens_and_inflections_passes(self) -> None:
+        source = "# Веб-сервер падает из-за нехватки памяти\n{}\n".encode()
+        generator = FakeGenerator("[[1]]\nВеб-сервер падает: памяти не хватает\n")
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(
+            result.rewritten, "# Веб-сервер падает: памяти не хватает\n{}\n".encode()
+        )
+        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.unrewritten, ())
+        self.assertEqual(result.requests, 1)
+
+    def test_ordinary_slash_prose_passes_without_a_retry(self) -> None:
+        source = "# Работает онлайн/оффлайн и/или вручную\n{}\n".encode()
+        generator = FakeGenerator("[[1]]\nМожно работать онлайн или вручную\n")
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, "# Можно работать онлайн или вручную\n{}\n".encode())
+        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.unrewritten, ())
+        self.assertEqual(result.requests, 1)
+
+    def test_the_guard_leaves_the_code_bytes_alone(self) -> None:
+        source = "# порт 8384 потерян\n{ x = 8384; }\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nпорт 8080 потерян\n",
+            "[[1]]\nпорт 8080 потерян, точно\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.rewritten, source)
+        self.assertEqual(code_segments(source), code_segments(result.rewritten))
+
+
 if __name__ == "__main__":
     unittest.main()
