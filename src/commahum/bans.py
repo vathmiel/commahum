@@ -12,6 +12,9 @@ better, but text the author wrote is not refused for being what it is. A rewrite
 that brings a banned construction *in* is refused like any other rewrite that
 fails the checks, is retried once, and is reported if it keeps failing.
 
+The table is found the way `skill.py` finds the skill: the checkout's `vendor/`,
+or the `commahum/_vendor/` an installed wheel carries.
+
 Reading the table with :mod:`ast` rather than importing it is deliberate: the
 module needs razdel and pymorphy3 for its morphological checks, and the rewriting
 pipeline has no other use for them.
@@ -24,10 +27,28 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from .skill import vendored_path
+
 __all__ = ["hard_bans", "introduced_bans", "markers_path"]
 
-_ROOT = Path(__file__).resolve().parents[2]
-_MARKERS = _ROOT / "vendor" / "humanizer-ru" / "scripts" / "humanizer_metrics" / "markers.py"
+#: The rule table, relative to a vendor root — the same spelling in a checkout
+#: (`vendor/humanizer-ru/...`) and in a wheel (`commahum/_vendor/humanizer-ru/...`).
+_MARKERS_RELATIVE = ("humanizer-ru", "scripts", "humanizer_metrics", "markers.py")
+
+
+def _markers() -> Path:
+    """Where the vendored table is, or a path that cannot be there when it is not."""
+    found = vendored_path("/".join(_MARKERS_RELATIVE))
+    if found is not None:
+        return found
+    # Nothing to point at. A path that cannot exist keeps the failure the same
+    # fail-closed one `hard_bans` raises for a table that goes missing later.
+    return Path("<no vendored tree>").joinpath(*_MARKERS_RELATIVE)
+
+
+#: Resolved once, at import: it cannot move while the process runs, and a test
+#: that simulates a missing table patches this name.
+_MARKERS = _markers()
 
 
 def markers_path() -> Path:

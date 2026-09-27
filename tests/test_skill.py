@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from commahum.skill import CATALOG, FLOW_READING, Skill, SkillError, vendored_skill
+from commahum.skill import CATALOG, FLOW_READING, Skill, SkillError, vendored_path, vendored_skill
 
 
 @contextlib.contextmanager
@@ -184,6 +184,25 @@ class MissingSkillTests(unittest.TestCase):
             skill.file("references/nowhere.md")
 
         self.assertIn("no references/nowhere.md", str(raised.exception))
+
+
+class VendorIsolationTests(unittest.TestCase):
+    def test_partial_packaged_tree_never_uses_an_ancestor_vendor(self) -> None:
+        from commahum import skill as module
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            package = root / "site-packages" / "commahum"
+            packaged_skill = package / "_vendor" / "humanizer-ru" / "SKILL.md"
+            packaged_skill.parent.mkdir(parents=True)
+            packaged_skill.write_text("---\nname: humanizer-ru\ndescription: Test\n---\n", encoding="utf-8")
+            foreign = root / "vendor" / "humanizer-ru" / "scripts" / "humanizer_metrics" / "markers.py"
+            foreign.parent.mkdir(parents=True)
+            foreign.write_text("foreign = True\n", encoding="utf-8")
+
+            with patch.object(module, "__file__", str(package / "skill.py")):
+                self.assertEqual(vendored_skill().directory, packaged_skill.parent)
+                self.assertIsNone(vendored_path("humanizer-ru/scripts/humanizer_metrics/markers.py"))
 
 
 class FlowTests(unittest.TestCase):

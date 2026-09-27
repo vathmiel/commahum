@@ -30,5 +30,13 @@ commahum = "commahum.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/commahum"]
 
+# An installed wheel has no `vendor/` above it — site-packages is as high as the
+# walk up from `commahum/skill.py` goes — so the vendored trees travel inside the
+# package, where that walk falls back to them. `vendor/` stays the layout of a
+# checkout; `commahum/_vendor/` is how it reads once installed.
+[tool.hatch.build.targets.wheel.force-include]
+"vendor/humanizer-ru" = "commahum/_vendor/humanizer-ru"
+"vendor/pi" = "commahum/_vendor/pi"
+
 [tool.hatch.build.targets.sdist]
-include = ["src/commahum", "tests", "eval", "README.md", "LICENSE"]
+include = ["src/commahum", "tests", "eval", "vendor", "README.md", "LICENSE"]

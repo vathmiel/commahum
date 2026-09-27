@@ -26,9 +26,10 @@ files the flow reads around an edit travel as ``--append-system-prompt``
 arguments.
 
 Where pi comes from: ``$COMMAHUM_PI`` if it is set, otherwise the copy vendored
-under ``vendor/pi/`` and run with the node on ``PATH``, otherwise a ``pi`` on
-``PATH``. The vendored copy is what this project tests against, so a checkout
-works without installing anything.
+with this project and run with the node on ``PATH``, otherwise a ``pi`` on
+``PATH``. The vendored copy travels with the package — ``vendor/pi/`` in a
+checkout, ``commahum/_vendor/pi/`` in an installed wheel — so a run needs neither
+an installation of pi nor anything of the repository it was built from.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ import subprocess
 from pathlib import Path
 from typing import Sequence
 
-from .skill import FLOW_READING, Skill, vendored_skill
+from .skill import FLOW_READING, Skill, vendored_path, vendored_skill
 
 __all__ = [
     "ISOLATION",
@@ -50,7 +51,9 @@ __all__ = [
     "vendored_entry",
 ]
 
-#: The entry point of the vendored copy, relative to the repository root.
+#: The entry point of the vendored copy, relative to a vendor root: the same
+#: spelling in a checkout (`vendor/pi/dist/bundle/cli.js`) and in a wheel
+#: (`commahum/_vendor/pi/dist/bundle/cli.js`).
 VENDORED_ENTRY = ("vendor", "pi", "dist", "bundle", "cli.js")
 
 #: Flags that keep a run to the one thing we ask for.
@@ -78,18 +81,17 @@ _AUTH_HINTS = ("auth", "token", "credential", "api key", "401", "403", "login")
 
 
 def vendored_entry() -> Path | None:
-    """``vendor/pi/dist/bundle/cli.js`` of this checkout, if it is there.
+    """``cli.js`` of the pi vendored with this installation, if there is one.
 
-    Found by walking up from this file, so an editable install and a plain
-    checkout both find it. Returns ``None`` rather than guessing a path: a
-    checkout without the vendored copy falls through to whatever pi the host
-    has, and says so if there is none.
+    In a checkout that is `vendor/pi/dist/bundle/cli.js`, some ancestor of this
+    file; in an installed wheel it is `commahum/_vendor/pi/dist/bundle/cli.js`,
+    inside the package, because site-packages has no repository above it. Both
+    come from `vendored_path`, so an editable install and a plain checkout keep
+    finding the tree the way they always did. Returns ``None`` rather than
+    guessing a path: an installation without the vendored copy falls through to
+    whatever pi the host has, and says so if there is none.
     """
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent.joinpath(*VENDORED_ENTRY)
-        if candidate.is_file():
-            return candidate
-    return None
+    return vendored_path("/".join(VENDORED_ENTRY[1:]))
 
 
 def pi_command() -> list[str]:

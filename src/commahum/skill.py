@@ -4,6 +4,11 @@ The rules are not this project's text. They are `vendor/humanizer-ru/`, a copy o
 the skill pinned to its upstream tag, and this module is the single place that
 knows how to find it, what to call it by and where its companion files are.
 
+Where the copy is depends on how the project was installed. A verified checkout
+keeps it at `vendor/humanizer-ru/`; an installed wheel keeps it inside the
+package, at `commahum/_vendor/humanizer-ru/`. An installed package never uses
+an ancestor's `vendor/` to replace a missing packaged file.
+
 Two guarantees live here, both fail-closed:
 
 * the skill has to be there and has to have a usable frontmatter, because a
@@ -23,14 +28,30 @@ opens it on demand rather than always.
 from __future__ import annotations
 
 import re
+import tomllib
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-__all__ = ["CATALOG", "FLOW_READING", "Skill", "SkillError", "catalog", "vendored_skill"]
+__all__ = [
+    "CATALOG",
+    "FLOW_READING",
+    "PACKAGED_VENDOR",
+    "Skill",
+    "SkillError",
+    "catalog",
+    "vendored_path",
+    "vendored_skill",
+]
 
-#: Where the skill lives inside this repository.
+#: Where the skill lives inside a vendor root: `vendor/humanizer-ru/SKILL.md` in a
+#: checkout, `commahum/_vendor/humanizer-ru/SKILL.md` in an installed package.
 VENDORED_SKILL = ("vendor", "humanizer-ru")
+
+#: What the package calls the vendor root it carries itself. A wheel cannot keep
+#: `vendor/` at the top of site-packages — that is nobody's to own — so the trees
+#: are mapped into the package at build time and looked for there first.
+PACKAGED_VENDOR = "_vendor"
 
 #: What the flow reads around the edit itself: before it (edit-log.md) and for
 #: the cold re-read after it (references/review.md).
@@ -97,19 +118,58 @@ def catalog(skill: Skill) -> Path:
     return skill.file(CATALOG)
 
 
+def vendored_path(relative: str) -> Path | None:
+    """A file of the vendored trees, wherever this installation keeps them.
+
+    ``relative`` is spelled the way a checkout spells it — ``humanizer-ru/SKILL.md``,
+    ``pi/dist/bundle/cli.js`` — and only a checkout can fall back to its vendor
+    tree. A wheel inside somebody else's repository uses only its packaged copy.
+    """
+    for root in _vendor_roots():
+        candidate = root / relative
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _vendor_roots() -> list[Path]:
+    """Use the package's own tree, or the vendor tree of a verified checkout.
+
+    Never walk arbitrary ancestors: site-packages may be inside someone else's
+    repository, and missing packaged files must not come from that repository.
+    """
+    package = Path(__file__).resolve().parent
+    packaged = package / PACKAGED_VENDOR
+    if packaged.exists():
+        return [packaged]
+
+    roots = [packaged]
+    if package.parent.name == "src":
+        checkout = package.parent.parent
+        pyproject = checkout / "pyproject.toml"
+        if pyproject.is_file() and tomllib.loads(pyproject.read_text(encoding="utf-8")).get(
+            "project", {}
+        ).get("name") == "commahum":
+            roots.append(checkout / VENDORED_SKILL[0])
+    return roots
+
+
 def _locate() -> Path:
-    """Walk up from this file to `vendor/humanizer-ru/SKILL.md`.
+    """The vendored `SKILL.md`: the packaged copy, else a verified checkout's.
 
     Missing is an error rather than an empty result: without the skill there are
     no rules to follow, and a pipeline that keeps going would be inventing them.
     """
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent.joinpath(*VENDORED_SKILL, "SKILL.md")
-        if candidate.is_file():
-            return candidate
-    raise SkillError(
-        "no vendored skill: expected " + "/".join(VENDORED_SKILL) + "/SKILL.md beside this package"
-    )
+    found = vendored_path("/".join((*VENDORED_SKILL[1:], "SKILL.md")))
+    if found is None:
+        raise SkillError(
+            "no vendored skill: expected "
+            + "/".join(VENDORED_SKILL)
+            + "/SKILL.md in a checkout, or "
+            + "/".join((PACKAGED_VENDOR, *VENDORED_SKILL[1:], "SKILL.md"))
+            + " inside an installed package"
+        )
+    return found
 
 
 @lru_cache(maxsize=8)
