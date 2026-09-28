@@ -11,6 +11,7 @@ options and the generator live in one place, and no command assembles its own.
 
 from __future__ import annotations
 
+from .model import saved
 from .pi_runner import pi_generator
 from .rewrite import INSTRUCTIONS
 from .skill import CATALOG, FLOW_READING
@@ -57,8 +58,14 @@ def generator(arguments, *, skill, readings=None):
     """
     if readings is None:
         readings = (*FLOW_READING, CATALOG) if arguments.catalog else FLOW_READING
+    model = arguments.model or saved()
+    if not arguments.model and model and arguments.provider and model.split("/", 1)[0] != arguments.provider:
+        raise RuntimeError(
+            f"--provider {arguments.provider!r} conflicts with model {model}; "
+            "use --model provider/id to choose a different provider"
+        )
     return pi_generator(
-        arguments.model,
+        model,
         arguments.provider,
         instructions=INSTRUCTIONS,
         skill=skill,

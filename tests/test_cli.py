@@ -42,6 +42,9 @@ class CliTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        environment = patch.dict(os.environ, {"XDG_CONFIG_HOME": self.temp.name})
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def write(self, name: str, text: str) -> Path:
         path = self.root / name

@@ -1,10 +1,11 @@
-"""The command line: one program, six commands.
+"""The command line: one program, seven commands.
 
     commahum rewrite <paths>   rewrite comments, show the diff, write only with --write
     commahum report  <paths>   rewrite, then grade the result with the skill's own scanner
     commahum measure <paths>   run a corpus and print the numbers, saving or comparing a baseline
     commahum probe             ask pi for words that exist only in the files it was given
     commahum check   <paths>   verify the invariant with a stand-in model — no model, no writes
+    commahum model             show, set or clear commahum's own model preference
     commahum auth              what pi is ready for, where the credential came from, and storing one
 
 A bare `commahum <paths>` means `rewrite`, because that is the safe default: read
@@ -33,7 +34,7 @@ import stat
 import sys
 import tempfile
 
-from . import asking, auth, measure, probe, report, selfcheck
+from . import asking, auth, measure, model, probe, report, selfcheck
 from .diff import render_diff
 from .interrupts import PIPE_STATUS, restore_interrupts, silence_stdout, trap_interrupts
 from .paths import collect, display_name
@@ -309,6 +310,11 @@ COMMANDS = {
         probe.add_arguments,
         probe.run,
         "check that the vendored skill really reaches the model, with rigged markers",
+    ),
+    "model": (
+        model.add_arguments,
+        model.run,
+        "show, save or clear commahum's model preference (pi's settings stay unchanged)",
     ),
     "auth": (
         auth.add_arguments,

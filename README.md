@@ -334,9 +334,11 @@ the parser rather than asserted.
 .venv/bin/commahum report path/to/file.nix        # rewrite, then grade it with the scanner
 .venv/bin/commahum measure --baseline eval/baseline.json eval/corpus   # is it still as good?
 .venv/bin/commahum probe --model deepseek/deepseek-flash   # is the skill reaching the model?
-.venv/bin/commahum auth                            # will pi answer, and from where?
+.venv/bin/commahum model set deepseek/deepseek-flash # remember the model for commahum only
+.venv/bin/commahum model                         # show the saved model
+.venv/bin/commahum auth                            # what pi has configured, and from where?
 .venv/bin/commahum auth --store deepseek --from-file ~/.hermes/.env --from-var DEEPSEEK_API_KEY
-.venv/bin/commahum --provider deepseek path/to/file.nix    # ask another provider
+.venv/bin/commahum --model deepseek/deepseek-flash path/to/file.nix # override for one run
 .venv/bin/commahum --catalog path/to/file.nix     # also send the 67-pattern catalogue
 .venv/bin/commahum --quiet path/or/dir            # no progress, just the diff and the summary
 ```
@@ -346,8 +348,8 @@ show, write nothing. The others are named because they are asked for by name —
 `check` before trusting anything (it is the one command that needs no key and no
 network), `report` when the question is "did that edit actually improve the text",
 `measure` when the question is whether a *change* did, `probe` when the question
-is whether the rules reach the model at all, and `auth` when the question is
-whether pi will answer in the first place — and with which credential. Only the
+is whether the rules reach the model at all, `model` to remember which model
+Commahum asks, and `auth` to see where pi found its credential. Only the
 first word decides which command runs, so a file called `report` is `./report`.
 
 Every request loads the vendored skill and carries the two files its flow reads;
@@ -357,11 +359,16 @@ request) for the cases where the flow's own advice is to open it.
 Directories are walked for `*.nix`. The model call goes through pi — the copy of
 it vendored in `vendor/pi/`, unless `$COMMAHUM_PI` points somewhere else.
 `--model` is pi's own word for who answers (`deepseek/deepseek-flash`,
-`openai-codex/gpt-5.5`, `sonnet:high`), and naming the provider there is what
-picks it: `--provider deepseek` on its own still gets an answer from the model pi
-is configured with, which is why the progress line says so. Credentials are pi's
-too, and they live in pi's own store: `~/.pi/agent/auth.json` (mode 600) holds one
-entry per provider — `{"deepseek": {"type": "api_key", "key": "..."}}` or the OAuth
+`openai-codex/gpt-5.5`, `sonnet:high`). `commahum model set provider/id` saves a
+Commahum-only default in `~/.config/commahum/config.json` (or under
+`$XDG_CONFIG_HOME` if set);
+`commahum model` shows it, and `commahum model clear` removes it. An explicit
+`--model` overrides the saved default for one run. Without either, pi picks its
+own model. Use a provider-qualified model to select a provider: `--provider`
+alone does not select its model, and conflicts with a saved model from a different
+provider. None of this changes pi's global preferences. Credentials are pi's
+business, and they live in pi's own store: `~/.pi/agent/auth.json` (mode 600)
+holds one entry per provider — `{"deepseek": {"type": "api_key", "key": "..."}}` or the OAuth
 triple a subscription signs in with — and a key in the environment is used when the
 store has none. `commahum auth` says what pi is ready for and where the credential
 came from; see "Authorizing a provider" below. Nothing about credentials is stored
@@ -372,7 +379,7 @@ A run says where each request goes before it waits for it, so a directory that
 takes minutes is not silent:
 
 ```sh
-$ commahum --provider deepseek /etc/nixos/hosts/deep-thought/generations.nix
+$ commahum --model deepseek/deepseek-flash /etc/nixos/hosts/deep-thought/generations.nix
 hosts/deep-thought/generations.nix: asking pi · deepseek/deepseek-flash · humanizer-ru
 hosts/deep-thought/generations.nix: 16 rewritten, 1 skipped, 0 kept
 1 files, 16 comments rewritten, 1 skipped, 0 kept, 1 requests
