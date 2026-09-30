@@ -106,6 +106,57 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
 
+    def test_write_refuses_a_symbolic_link_without_asking_the_model(self) -> None:
+        target = self.write("target.nix", "# старое\n{}\n")
+        link = self.root / "link.nix"
+        link.symlink_to(target)
+        generator = FakeGenerator()
+
+        code, _, err = self.run_cli(["--write", str(link)], generator)
+
+        self.assertEqual(code, 1)
+        self.assertIn("symbolic link", err)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(target.read_bytes(), "# старое\n{}\n".encode())
+        self.assertEqual(generator.prompts, [])
+
+    def test_write_refuses_a_hard_link_without_splitting_it(self) -> None:
+        target = self.write("target.nix", "# старое\n{}\n")
+        link = self.root / "link.nix"
+        os.link(target, link)
+
+        code, _, err = self.run_cli(["--write", str(link)], FakeGenerator())
+
+        self.assertEqual(code, 1)
+        self.assertIn("hard-linked", err)
+        self.assertEqual(link.stat().st_ino, target.stat().st_ino)
+        self.assertEqual(target.read_bytes(), "# старое\n{}\n".encode())
+
+    def test_a_refused_link_does_not_stop_the_next_regular_file(self) -> None:
+        target = self.write("target.nix", "# старое\n{}\n")
+        link = self.root / "link.nix"
+        link.symlink_to(target)
+        generator = FakeGenerator("[[1]]\nновое\n")
+
+        code, _, _ = self.run_cli(["--write", str(link), str(target)], generator)
+
+        self.assertEqual(code, 1)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(target.read_bytes(), "# новое\n{}\n".encode())
+        self.assertEqual(len(generator.prompts), 1)
+
+    def test_preview_can_read_a_symbolic_link(self) -> None:
+        target = self.write("target.nix", "# старое\n{}\n")
+        link = self.root / "link.nix"
+        link.symlink_to(target)
+
+        code, out, _ = self.run_cli([str(link)], FakeGenerator("[[1]]\nновое\n"))
+
+        self.assertEqual(code, 0)
+        self.assertIn("+# новое", out)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(target.read_bytes(), "# старое\n{}\n".encode())
+
     def test_walks_a_directory(self) -> None:
         self.write("a.nix", "# первый\n{}\n")
         self.write("b.nix", "# второй\n{}\n")
@@ -153,6 +204,48 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("absent.nix", err)
+
+    def test_an_unreadable_file_is_reported_and_the_next_file_is_rewritten(self) -> None:
+        unreadable = self.write("a.nix", "# старое\n{}\n")
+        later = self.write("b.nix", "# старое\n{}\n")
+        read_bytes = Path.read_bytes
+        generator = FakeGenerator("[[1]]\nновое\n")
+
+        def read(path):
+            if path == unreadable:
+                raise PermissionError("cannot read")
+            return read_bytes(path)
+
+        with patch.object(Path, "read_bytes", read):
+            code, _, err = self.run_cli(["--write", str(unreadable), str(later)], generator)
+
+        self.assertEqual(code, 1)
+        self.assertIn(f"{unreadable}: PermissionError", err)
+        self.assertEqual(unreadable.read_bytes(), "# старое\n{}\n".encode())
+        self.assertEqual(later.read_bytes(), "# новое\n{}\n".encode())
+        self.assertEqual(len(generator.prompts), 1)
+
+    def test_a_failed_replace_is_reported_and_cleans_up_before_the_next_file(self) -> None:
+        unwritable = self.write("a.nix", "# старое\n{}\n")
+        later = self.write("b.nix", "# старое\n{}\n")
+        replace = os.replace
+
+        def move(source, target):
+            if target == unwritable:
+                raise PermissionError("cannot replace")
+            return replace(source, target)
+
+        with patch("commahum.cli.os.replace", move):
+            code, _, err = self.run_cli(
+                ["--write", str(unwritable), str(later)],
+                FakeGenerator("[[1]]\nновое\n", "[[1]]\nновое\n"),
+            )
+
+        self.assertEqual(code, 1)
+        self.assertIn(f"{unwritable}: PermissionError", err)
+        self.assertEqual(unwritable.read_bytes(), "# старое\n{}\n".encode())
+        self.assertEqual(later.read_bytes(), "# новое\n{}\n".encode())
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["a.nix", "b.nix"])
 
     def test_reports_comments_the_model_did_not_return(self) -> None:
         path = self.write("home.nix", "# текст\n{}\n")
@@ -433,6 +526,23 @@ class WriteConflictTests(unittest.TestCase):
         self.assertEqual(code, 130)
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(sorted(self.root.iterdir()), [path])
+
+    def test_a_file_replaced_with_a_symbolic_link_during_the_request_is_left_alone(self) -> None:
+        path = self.write("home.nix", "# старое\n{}\n")
+        target = self.write("target.nix", "# старое\n{}\n")
+
+        def generate(_prompt: str) -> str:
+            path.unlink()
+            path.symlink_to(target)
+            return "[[1]]\nновое\n"
+
+        code, _, err = self.run_cli(["--write", str(path)], generate)
+
+        self.assertEqual(code, 1)
+        self.assertIn("symbolic link", err)
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(target.read_bytes(), "# старое\n{}\n".encode())
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["home.nix", "target.nix"])
 
     def test_a_file_that_vanished_while_it_was_rewritten_is_not_recreated(self) -> None:
         """A file that is gone is not a file to write: fail closed and report it.
