@@ -55,6 +55,7 @@ FIELDS = (
     "files",
     "requests",
     "applied",
+    "unchanged",
     "skipped",
     "kept",
     "score_before",
@@ -94,9 +95,11 @@ def metrics_from(payload: dict, totals: dict, *, model: str | None = None, corpu
     metrics when empty, because a caller folding a bare payload has no corpus to name.
     """
     metrics = {
+        "rewrite_counts_version": 2,
         "files": totals["files"],
         "requests": totals["requests"],
         "applied": totals["applied"],
+        "unchanged": totals.get("unchanged", 0),
         "skipped": totals["skipped"],
         "kept": totals["kept"],
     }
@@ -125,6 +128,11 @@ def scanner_numbers(payload: dict) -> dict:
 def compare(now: dict, baseline: dict) -> tuple[list[str], list[str]]:
     """Return ``(regressions, complaints)`` — complaints are about comparability."""
     complaints: list[str] = []
+    if now.get("rewrite_counts_version", 1) != baseline.get("rewrite_counts_version", 1):
+        complaints.append(
+            "the baseline counts accepted replies as applied; this run counts actual changes "
+            "and records unchanged replies separately; re-record it deliberately with --save"
+        )
     recorded = _corpus_by_path(baseline)
     measured = _corpus_by_path(now)
     baseline_issue = _corpus_issue(baseline)
@@ -230,6 +238,8 @@ def _corpus_issue(metrics: dict) -> str | None:
         "requests", "applied", "skipped", "kept", "score_before", "score_after",
         "bans", "markers", "facts_kept", "facts_new", "facts_lost",
     )
+    if metrics.get("rewrite_counts_version") == 2:
+        numbers = (*numbers, "unchanged")
     for record in records:
         if not isinstance(record, dict) or not isinstance(record.get("path"), str) or not record["path"]:
             return "an incomplete per-file identity"
@@ -295,12 +305,14 @@ def run(arguments, generate=None) -> int:
                 "sha256": hashlib.sha256(source).hexdigest(),
                 "requests": result.requests,
                 "applied": len(result.applied),
+                "unchanged": len(result.unchanged),
                 "skipped": len(result.skipped),
                 "kept": len(result.unrewritten),
             }
         )
         print(
             f"{path}: {len(result.applied)} rewritten, {len(result.skipped)} skipped, "
+            f"{len(result.unchanged)} unchanged, "
             f"{len(result.unrewritten)} kept, {result.requests} requests",
             file=sys.stderr,
         )
@@ -313,6 +325,7 @@ def run(arguments, generate=None) -> int:
         "files": len(records),
         "requests": sum(record["requests"] for record in records),
         "applied": sum(record["applied"] for record in records),
+        "unchanged": sum(record["unchanged"] for record in records),
         "skipped": sum(record["skipped"] for record in records),
         "kept": sum(record["kept"] for record in records),
     }
