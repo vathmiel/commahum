@@ -13,6 +13,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -230,6 +231,72 @@ class StoreTests(AuthTestCase):
         written = json.loads(self.store.read_text(encoding="utf-8"))
         self.assertEqual(sorted(written), ["anthropic", "deepseek"])
         self.assertEqual(written["anthropic"]["key"], OTHER_KEY)
+
+    def test_verification_exceptions_restore_the_exact_previous_bytes(self) -> None:
+        self.agent.mkdir(parents=True, exist_ok=True)
+        before = b'{\r\n  "anthropic": {"type": "api_key", "key": "old"}\r\n}\r\n'
+        for error in (subprocess.TimeoutExpired("pi", 120, output=KEY), OSError(KEY), RuntimeError(KEY)):
+            with self.subTest(error=type(error).__name__):
+                self.store.write_bytes(before)
+
+                def checker(*args, **kwargs):
+                    raise error
+
+                code, out, err = self.run_auth("--store", "deepseek", checker=checker, stdin=KEY)
+
+                self.assertEqual(code, 2)
+                self.assertEqual(self.store.read_bytes(), before)
+                self.assertIn(type(error).__name__, err)
+                self.assertNotIn(KEY, out + err)
+
+    def test_a_verification_exception_removes_a_new_store(self) -> None:
+        def checker(*args, **kwargs):
+            raise subprocess.TimeoutExpired("pi", 120)
+
+        code, _, _ = self.run_auth("--store", "deepseek", checker=checker, stdin=KEY)
+
+        self.assertEqual(code, 2)
+        self.assertFalse(self.store.exists())
+
+    def test_an_interrupt_restores_the_store_before_leaving(self) -> None:
+        self.write_store({"anthropic": {"type": "api_key", "key": OTHER_KEY}})
+        before = self.store.read_bytes()
+
+        def checker(*args, **kwargs):
+            raise KeyboardInterrupt
+
+        code, _, _ = self.run_auth("--store", "deepseek", checker=checker, stdin=KEY)
+
+        self.assertEqual(code, 130)
+        self.assertEqual(self.store.read_bytes(), before)
+
+    def test_rollback_keeps_another_provider_changed_during_verification(self) -> None:
+        self.write_store({"deepseek": {"type": "api_key", "key": "old"}})
+
+        def checker(*args, **kwargs):
+            current = json.loads(self.store.read_bytes())
+            current["anthropic"] = {"type": "api_key", "key": OTHER_KEY}
+            self.store.write_text(json.dumps(current), encoding="utf-8")
+            return {"status": "not_ready"}
+
+        code, _, err = self.run_auth("--store", "deepseek", checker=checker, stdin=KEY)
+
+        self.assertEqual(code, 2)
+        current = json.loads(self.store.read_bytes())
+        self.assertEqual(current["deepseek"]["key"], "old")
+        self.assertEqual(current["anthropic"]["key"], OTHER_KEY)
+        self.assertIn("concurrent changes were kept", err)
+
+    def test_rollback_does_not_replace_a_newer_entry_for_the_same_provider(self) -> None:
+        def checker(*args, **kwargs):
+            self.write_store({"deepseek": {"type": "api_key", "key": OTHER_KEY}})
+            return {"status": "not_ready"}
+
+        code, _, err = self.run_auth("--store", "deepseek", checker=checker, stdin=KEY)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(self.store.read_bytes())["deepseek"]["key"], OTHER_KEY)
+        self.assertIn("left untouched", err)
 
     def test_a_store_we_do_not_understand_is_left_alone(self) -> None:
         self.agent.mkdir(parents=True, exist_ok=True)
