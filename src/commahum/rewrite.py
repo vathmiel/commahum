@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 from .bans import introduced_bans
 from .comments import CommentError, CommentSpan
-from .patch import Rewrite, apply_rewrites
+from .patch import CommentPatcher, Rewrite
 from .selection import Candidate, select_candidates
 from .values import value_drift
 
@@ -50,7 +50,7 @@ INSTRUCTIONS = """\
 Как отвечать:
 строка [[N]] открывает комментарий с номером N;
 текст нового комментария идёт следующей строкой и укладывается в одну строку;
-номера идут по порядку, один абзац на комментарий;
+номера идут по порядку, каждый ровно один раз, один абзац на комментарий;
 никаких пояснений, кавычек вокруг текста и блоков кода; \
 отчёт из скилла (баллы сканера, «что снято») здесь не нужен, ответ — только \
 строки [[N]] с текстом.
@@ -64,13 +64,14 @@ _ATTEMPTS = 2
 
 @dataclass(frozen=True)
 class RewriteResult:
-    """What the round trip did: rewritten bytes, applied ids, failures, skips."""
+    """Changed bytes and ids, unchanged replies, failures, skips and request count."""
 
     rewritten: bytes
     applied: tuple[int, ...]
     unrewritten: tuple[tuple[int, str], ...]
     skipped: tuple[tuple[CommentSpan, str], ...]
     requests: int
+    unchanged: tuple[int, ...] = ()
 
 
 def build_request(items, *, invocation: str | None = None) -> str:
@@ -103,6 +104,8 @@ def parse_reply(reply: str, numbers, *, multiline=()) -> dict[int, bytes]:
     wanted = set(numbers)
     multiline = set(multiline)
     bodies: dict[int, bytes] = {}
+    seen: set[int] = set()
+    duplicates: set[int] = set()
     current: int | None = None
     buffer: list[str] = []
     for line in reply.splitlines():
@@ -110,12 +113,17 @@ def parse_reply(reply: str, numbers, *, multiline=()) -> dict[int, bytes]:
         if match:
             _store(bodies, current, buffer, wanted, multiline)
             current = int(match.group(1))
+            if current in seen:
+                duplicates.add(current)
+            seen.add(current)
             buffer = []
             continue
         if current is not None:
             buffer.append(line)
     _store(bodies, current, buffer, wanted, multiline)
-    return bodies
+    # A repeated id is ambiguous even when one section is empty, or both agree.
+    # Leave it missing so only that comment is retried; valid neighbours survive.
+    return {number: body for number, body in bodies.items() if number not in duplicates}
 
 
 def rewrite_source(source: bytes, generate, *, invocation: str | None = None) -> RewriteResult:
@@ -124,6 +132,8 @@ def rewrite_source(source: bytes, generate, *, invocation: str | None = None) ->
     candidates = selection.candidates
     if not candidates:
         return RewriteResult(source, (), (), selection.skipped, 0)
+
+    patcher = CommentPatcher(source)
 
     numbered = list(enumerate(candidates, 1))
     approved: dict[int, bytes] = {}
@@ -153,7 +163,7 @@ def rewrite_source(source: bytes, generate, *, invocation: str | None = None) ->
                 continue
             comment = item.assemble(body)
             try:
-                apply_rewrites(source, [Rewrite(item.span, comment)])
+                patcher.validate(Rewrite(item.span, comment))
             except (CommentError, TypeError) as error:
                 still_pending.append((number, item, str(error)))
                 continue
@@ -181,14 +191,21 @@ def rewrite_source(source: bytes, generate, *, invocation: str | None = None) ->
     rewrites = [
         Rewrite(candidate.span, approved[number])
         for number, candidate in numbered
-        if number in approved
+        if number in approved and approved[number] != candidate.span.text
     ]
     return RewriteResult(
-        rewritten=apply_rewrites(source, rewrites),
-        applied=tuple(number for number, _ in numbered if number in approved),
+        rewritten=patcher.apply(rewrites),
+        applied=tuple(
+            number for number, candidate in numbered
+            if number in approved and approved[number] != candidate.span.text
+        ),
         unrewritten=tuple((number, reason) for number, _, reason in pending),
         skipped=selection.skipped,
         requests=requests,
+        unchanged=tuple(
+            number for number, candidate in numbered
+            if number in approved and approved[number] == candidate.span.text
+        ),
     )
 
 

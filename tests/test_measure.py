@@ -48,6 +48,7 @@ def corpus_records() -> list[dict]:
             "sha256": "aa" * 32,
             "requests": 1,
             "applied": 3,
+            "unchanged": 0,
             "skipped": 0,
             "kept": 1,
             "score_before": 41,
@@ -63,6 +64,7 @@ def corpus_records() -> list[dict]:
             "sha256": "bb" * 32,
             "requests": 1,
             "applied": 2,
+            "unchanged": 0,
             "skipped": 1,
             "kept": 0,
             "score_before": 55,
@@ -83,9 +85,11 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(
             metrics,
             {
+                "rewrite_counts_version": 2,
                 "files": 2,
                 "requests": 2,
                 "applied": 7,
+                "unchanged": 0,
                 "skipped": 1,
                 "kept": 0,
                 "score_before": 61,
@@ -136,6 +140,15 @@ class ComparisonTests(unittest.TestCase):
         regressions, complaints = compare(self.baseline, self.baseline)
 
         self.assertEqual((regressions, complaints), ([], []))
+
+    def test_accepted_reply_counts_are_not_compared_with_actual_change_counts(self) -> None:
+        legacy = dict(self.baseline)
+        del legacy["rewrite_counts_version"]
+
+        _, complaints = compare(self.baseline, legacy)
+
+        self.assertTrue(any("accepted replies" in complaint for complaint in complaints))
+        self.assertTrue(any("--save" in complaint for complaint in complaints))
 
     def test_a_baseline_without_per_file_identity_is_not_comparable(self) -> None:
         """An older baseline knows only a count: it cannot say *which* files it measured."""
@@ -369,6 +382,17 @@ class MeasureCommandTests(unittest.TestCase):
         self.assertIn("score_after:", out)
         self.assertIn("facts_lost: 0", out)
         self.assertFalse(self.baseline.exists())
+
+    def test_an_unchanged_reply_is_recorded_as_unchanged_not_applied(self) -> None:
+        code, _, err = self.measure(
+            "--save", str(self.baseline), str(self.corpus),
+            reply="[[1]]\nОсуществляется настройка сети хоста.\n",
+        )
+
+        self.assertEqual(code, 0, err)
+        recorded = json.loads(self.baseline.read_text(encoding="utf-8"))
+        self.assertEqual((recorded["applied"], recorded["unchanged"]), (0, 1))
+        self.assertEqual((recorded["corpus"][0]["applied"], recorded["corpus"][0]["unchanged"]), (0, 1))
 
     def test_a_saved_baseline_records_every_file_by_path_and_hash(self) -> None:
         code, _, err = self.measure("--save", str(self.baseline), str(self.corpus))

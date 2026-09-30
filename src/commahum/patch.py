@@ -11,11 +11,11 @@ repaired.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .comments import CommentError, CommentSpan, find_comment_spans
 
-__all__ = ["Rewrite", "apply_rewrites"]
+__all__ = ["CommentPatcher", "Rewrite", "apply_rewrites"]
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,41 @@ class Rewrite:
 
     span: CommentSpan
     text: bytes
+
+
+@dataclass(frozen=True)
+class CommentPatcher:
+    """Validate many proposals against one parsed, immutable source snapshot."""
+
+    source: bytes
+    _comments: dict = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, (bytes, bytearray, memoryview)):
+            raise TypeError(f"source must be bytes, not {type(self.source).__name__}")
+        object.__setattr__(self, "source", bytes(self.source))
+        object.__setattr__(self, "_comments", {
+            (span.start_byte, span.end_byte): span
+            for span in find_comment_spans(self.source)
+        })
+
+    def validate(self, rewrite: Rewrite) -> None:
+        """Check a proposal without constructing a copy of the whole file."""
+        _check_rewrite(rewrite, self.source, self._comments)
+
+    def apply(self, rewrites) -> bytes:
+        ordered = sorted(rewrites, key=lambda rewrite: rewrite.span.start_byte)
+        _reject_overlaps(ordered)
+        for rewrite in ordered:
+            self.validate(rewrite)
+        out = bytearray()
+        position = 0
+        for rewrite in ordered:
+            out += self.source[position : rewrite.span.start_byte]
+            out += rewrite.text
+            position = rewrite.span.end_byte
+        out += self.source[position:]
+        return bytes(out)
 
 
 def apply_rewrites(source: bytes, rewrites) -> bytes:
@@ -40,20 +75,7 @@ def apply_rewrites(source: bytes, rewrites) -> bytes:
     if not rewrites:
         return source
 
-    ordered = sorted(rewrites, key=lambda rewrite: rewrite.span.start_byte)
-    _reject_overlaps(ordered)
-    comments = find_comment_spans(source)
-    for rewrite in ordered:
-        _check_rewrite(rewrite, source, comments)
-
-    out = bytearray()
-    position = 0
-    for rewrite in ordered:
-        out += source[position : rewrite.span.start_byte]
-        out += rewrite.text
-        position = rewrite.span.end_byte
-    out += source[position:]
-    return bytes(out)
+    return CommentPatcher(source).apply(rewrites)
 
 
 def _reject_overlaps(ordered) -> None:
@@ -77,7 +99,7 @@ def _check_rewrite(rewrite, source: bytes, comments) -> None:
         raise CommentError(
             f"rewrite range {span.start_byte}:{span.end_byte} comes from a different source"
         )
-    if comment_for(comments, span) is None:
+    if (span.start_byte, span.end_byte) not in comments:
         raise CommentError(
             f"byte range {span.start_byte}:{span.end_byte} is not a comment in this source"
         )

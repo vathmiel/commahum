@@ -13,6 +13,12 @@ compare a different corpus even when it contains the same number of files.
 | `skipped.nix` | what the selection must not touch: `shellcheck` and `nix-shell` directives, a bare URL, and `TODO:`/`FIXME:` markers whose bodies may change while the marker survives |
 | `english.nix` | an English comment. The rules are Russian, so the honest outcome is that it is left alone; if it comes back rewritten, that is a finding |
 
+Replies returned verbatim are counted as `unchanged`; only actual edits count
+as `applied`. New measurements record `rewrite_counts_version: 2`. The historical
+checked-in baseline predates that distinction, so it must be re-recorded
+deliberately before comparing it with a new run; its counts cannot be migrated
+without the original model replies.
+
 ## Running it
 
 ```sh

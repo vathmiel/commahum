@@ -154,6 +154,13 @@ test makes judgement certain. The mechanism is checked, the enforcement is
 checked, the effect is measured, and the rest is visible in the diff a human is
 meant to read.
 
+Replies returned verbatim count as `unchanged`, not `rewritten`/`applied`.
+`kept` counts comments rejected after the retry; `skipped` counts comments never
+offered to the model. This distinction is shared by rewrite, report and measure.
+New baselines record `rewrite_counts_version: 2`; older baselines must be
+re-recorded deliberately with `--save` because their `applied` included unchanged
+replies. The checked-in baseline is a historical version-1 measurement.
+
 ## Measuring the edit
 
 Removing what was already there is left to the model, so "did it work" is a
@@ -240,7 +247,10 @@ deepseek: the key is in /home/vathmiel/.pi/agent/auth.json, mode 0o600, and pi c
 ```
 
 The store is written atomically, every other provider is kept, and an entry pi does
-not confirm is rolled back byte for byte — a credential is either confirmed by pi or
+not confirm is rolled back, including on timeouts and interrupts. An unchanged
+store is restored byte for byte; concurrent edits to other providers are kept,
+and a newer entry for the same provider is left untouched. These guarded writes
+are not a compare-and-swap. A credential is either confirmed by pi or
 it is not a credential. A store file that is not valid JSON is refused rather than
 overwritten, and a key is never printed, not even its first characters. A
 subscription is not something this command can copy: `--login` hands the terminal to
@@ -405,6 +415,11 @@ rest. This closes the long model-request window, not the tiny race between that
 last read and `os.replace`; it is not an atomic compare-and-swap. A run that
 cannot start at all — no node, no pi — is 2, with a sentence rather than a
 traceback.
+
+`--write` refuses symbolic links and files with multiple hard links, before asking
+the model and again before replacement. A preview can still read a symbolic link;
+to write it, name the regular target directly. Refusals do not stop later files
+and make the run exit 1.
 
 ```sh
 $ commahum --provider deepseek /etc/nixos/modules

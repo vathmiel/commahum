@@ -56,6 +56,7 @@ def run(arguments, generate=None) -> int:
         after_parts.append(f"# {path}\n{prose(result.rewritten)}")
         print(
             f"{path}: {len(result.applied)} rewritten, "
+            f"{len(result.unchanged)} unchanged, "
             f"{len(result.skipped)} skipped, {len(result.unrewritten)} kept, "
             f"{result.requests} requests",
             file=sys.stderr,

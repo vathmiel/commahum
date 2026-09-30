@@ -9,6 +9,9 @@ retry and then gets dropped, never forced in.
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+
+from commahum import patch as patcher
 
 from commahum.comments import find_comment_spans
 from commahum.rewrite import RewriteResult, build_request, parse_reply, rewrite_source
@@ -125,8 +128,64 @@ class ParseReplyTests(unittest.TestCase):
 
         self.assertEqual(bodies, {1: "первый".encode()})
 
+    def test_repeated_sections_are_ambiguous_and_do_not_discard_other_comments(self) -> None:
+        for first, second in (("первый", "второй"), ("первый", "первый"), ("", "второй")):
+            with self.subTest(first=first, second=second):
+                reply = f"[[1]]\n{first}\n[[2]]\nсосед\n[[1]]\n{second}\n"
+
+                self.assertEqual(parse_reply(reply, [1, 2]), {2: "сосед".encode()})
+
 
 class RewriteSourceTests(unittest.TestCase):
+    def test_retries_an_ambiguous_id_without_retrying_its_valid_neighbour(self) -> None:
+        source = "# первый\n# второй\n{}\n".encode()
+        generator = FakeGenerator(
+            "[[1]]\nПЕРВЫЙ\n[[1]]\nДРУГОЙ\n[[2]]\nВТОРОЙ\n",
+            "[[1]]\nПЕРВЫЙ\n",
+        )
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.applied, (1, 2))
+        self.assertEqual(result.requests, 2)
+        self.assertNotIn("[[2]]", generator.prompts[1])
+        self.assertEqual(code_segments(source), code_segments(result.rewritten))
+
+    def test_a_repeated_id_on_both_attempts_keeps_the_original_comment(self) -> None:
+        source = "# исходник\n{}\n".encode()
+        reply = "[[1]]\nновое\n[[1]]\nдругое\n"
+
+        result = rewrite_source(source, FakeGenerator(reply, reply))
+
+        self.assertEqual(result.rewritten, source)
+        self.assertEqual(result.applied, ())
+        self.assertEqual(len(result.unrewritten), 1)
+
+    def test_changed_unchanged_and_failed_replies_are_counted_separately(self) -> None:
+        source = "# первый\n# второй\n# третий\n{}\n".encode()
+        generator = FakeGenerator("[[1]]\nПЕРВЫЙ\n[[2]]\nвторой\n", "")
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.unchanged, (2,))
+        self.assertEqual(tuple(number for number, _ in result.unrewritten), (3,))
+        self.assertEqual(result.requests, 2)
+        self.assertEqual(code_segments(source), code_segments(result.rewritten))
+
+    def test_validation_parses_the_source_once_for_many_proposals_and_a_retry(self) -> None:
+        source = ("".join(f"# комментарий {number}\n" for number in range(100)) + "{}\n").encode()
+        replies = "".join(f"[[{number + 1}]]\nКОММЕНТАРИЙ {number}\n" for number in range(100))
+        generator = FakeGenerator(replies.replace("[[1]]", "[[999]]", 1), "[[1]]\nКОММЕНТАРИЙ 0\n")
+
+        with patch.object(patcher, "find_comment_spans", wraps=patcher.find_comment_spans) as parse:
+            result = rewrite_source(source, generator)
+
+        self.assertEqual(parse.call_count, 1)
+        self.assertEqual(len(result.applied), 100)
+        self.assertEqual(result.requests, 2)
+        self.assertEqual(code_segments(source), code_segments(result.rewritten))
+
     def test_rewrites_every_comment_and_touches_no_code(self) -> None:
         source = "# первый\n{ x = 1; }\n/* второй */\n".encode()
         generator = FakeGenerator("[[1]]\nПЕРВЫЙ\n[[2]]\nВТОРОЙ\n")
@@ -159,7 +218,8 @@ class RewriteSourceTests(unittest.TestCase):
         result = rewrite_source(source, generator)
 
         self.assertEqual(result.rewritten, "# первый\n{}\n# ВТОРОЙ\n".encode())
-        self.assertEqual(result.applied, (1, 2))
+        self.assertEqual(result.applied, (2,))
+        self.assertEqual(result.unchanged, (1,))
         self.assertEqual(result.requests, 2)
         self.assertIn("[[2]]", generator.prompts[1])
         self.assertNotIn("[[1]]", generator.prompts[1])
@@ -234,7 +294,8 @@ class RewriteSourceTests(unittest.TestCase):
 
         result = rewrite_source(source, generator)
 
-        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.applied, ())
+        self.assertEqual(result.unchanged, (1,))
         self.assertEqual(result.unrewritten, ())
 
 

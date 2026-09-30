@@ -10,7 +10,7 @@ from __future__ import annotations
 import unittest
 
 from commahum.comments import CommentError, find_comment_spans
-from commahum.patch import Rewrite, apply_rewrites
+from commahum.patch import CommentPatcher, Rewrite, apply_rewrites
 
 
 def code_segments(source: bytes) -> list[bytes]:
@@ -25,6 +25,20 @@ def code_segments(source: bytes) -> list[bytes]:
 
 
 class ApplyRewritesTests(unittest.TestCase):
+    def test_a_reusable_patcher_refuses_a_foreign_snapshot_or_a_code_range(self) -> None:
+        source = b"# old\n{}\n"
+        patcher = CommentPatcher(source)
+        (foreign,) = find_comment_spans(b"# other\n{}\n")
+        (span,) = find_comment_spans(source)
+        fake = type(span)(source.index(b"{}"), source.index(b"{}") + 2, source)
+
+        for invalid in (Rewrite(foreign, b"# new"), Rewrite(fake, b"# new"), Rewrite(span, b"# new\ncode")):
+            with self.subTest(invalid=invalid), self.assertRaises(CommentError):
+                patcher.validate(invalid)
+
+        patcher.validate(Rewrite(span, b"# new"))
+        self.assertEqual(patcher.apply([Rewrite(span, b"# new")]), b"# new\n{}\n")
+
     def test_replaces_only_the_comment_bytes(self) -> None:
         source = "# старое\n{ x = 1; }\n".encode()
         (span,) = find_comment_spans(source)
