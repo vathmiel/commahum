@@ -9,6 +9,9 @@ retry and then gets dropped, never forced in.
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
+
+from commahum import patch as patcher
 
 from commahum.comments import find_comment_spans
 from commahum.rewrite import RewriteResult, build_request, parse_reply, rewrite_source
@@ -167,6 +170,19 @@ class RewriteSourceTests(unittest.TestCase):
         self.assertEqual(result.applied, (1,))
         self.assertEqual(result.unchanged, (2,))
         self.assertEqual(tuple(number for number, _ in result.unrewritten), (3,))
+        self.assertEqual(result.requests, 2)
+        self.assertEqual(code_segments(source), code_segments(result.rewritten))
+
+    def test_validation_parses_the_source_once_for_many_proposals_and_a_retry(self) -> None:
+        source = ("".join(f"# комментарий {number}\n" for number in range(100)) + "{}\n").encode()
+        replies = "".join(f"[[{number + 1}]]\nКОММЕНТАРИЙ {number}\n" for number in range(100))
+        generator = FakeGenerator(replies.replace("[[1]]", "[[999]]", 1), "[[1]]\nКОММЕНТАРИЙ 0\n")
+
+        with patch.object(patcher, "find_comment_spans", wraps=patcher.find_comment_spans) as parse:
+            result = rewrite_source(source, generator)
+
+        self.assertEqual(parse.call_count, 1)
+        self.assertEqual(len(result.applied), 100)
         self.assertEqual(result.requests, 2)
         self.assertEqual(code_segments(source), code_segments(result.rewritten))
 

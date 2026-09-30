@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 from .bans import introduced_bans
 from .comments import CommentError, CommentSpan
-from .patch import Rewrite, apply_rewrites
+from .patch import CommentPatcher, Rewrite
 from .selection import Candidate, select_candidates
 from .values import value_drift
 
@@ -133,6 +133,8 @@ def rewrite_source(source: bytes, generate, *, invocation: str | None = None) ->
     if not candidates:
         return RewriteResult(source, (), (), selection.skipped, 0)
 
+    patcher = CommentPatcher(source)
+
     numbered = list(enumerate(candidates, 1))
     approved: dict[int, bytes] = {}
     pending: list[tuple[int, Candidate, str]] = [(number, item, "") for number, item in numbered]
@@ -161,7 +163,7 @@ def rewrite_source(source: bytes, generate, *, invocation: str | None = None) ->
                 continue
             comment = item.assemble(body)
             try:
-                apply_rewrites(source, [Rewrite(item.span, comment)])
+                patcher.validate(Rewrite(item.span, comment))
             except (CommentError, TypeError) as error:
                 still_pending.append((number, item, str(error)))
                 continue
@@ -192,7 +194,7 @@ def rewrite_source(source: bytes, generate, *, invocation: str | None = None) ->
         if number in approved and approved[number] != candidate.span.text
     ]
     return RewriteResult(
-        rewritten=apply_rewrites(source, rewrites),
+        rewritten=patcher.apply(rewrites),
         applied=tuple(
             number for number, candidate in numbered
             if number in approved and approved[number] != candidate.span.text
