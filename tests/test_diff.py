@@ -8,6 +8,10 @@ even when the file is not valid UTF-8.
 from __future__ import annotations
 
 import unittest
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
 from commahum.comments import find_comment_spans
 from commahum.diff import render_diff
@@ -59,6 +63,35 @@ class RenderDiffTests(unittest.TestCase):
         source = "# комментарий\n{}\n".encode()
 
         self.assertEqual(render_diff(source, source, "example.nix"), "")
+
+    def test_marks_each_unterminated_changed_line(self) -> None:
+        diff = render_diff(b"# old", b"# new", "example.nix")
+
+        self.assertIn("-# old\n\\ No newline at end of file\n", diff)
+        self.assertIn("+# new\n\\ No newline at end of file\n", diff)
+
+    @unittest.skipUnless(shutil.which("git"), "git is needed to verify patch application")
+    def test_git_applies_patches_without_changing_line_endings_or_final_newlines(self) -> None:
+        cases = [
+            (b"# old", b"# new"),
+            (b"# old\n", b"# new"),
+            (b"# old", b"# new\n"),
+            (b"# old\r\n{}", b"# new\r\n{}"),
+            ("# old\u2028word\n{}\n".encode(), "# new\u2028word\n{}\n".encode()),
+            (b"# old\xff\n{}\n", b"# new\xff\n{}\n"),
+        ]
+        for original, rewritten in cases:
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "example.nix"
+                path.write_bytes(original)
+                done = subprocess.run(
+                    ["git", "apply", "--no-index", "--whitespace=nowarn"],
+                    input=render_diff(original, rewritten, path.name).encode("utf-8", "surrogateescape"),
+                    cwd=folder, capture_output=True,
+                )
+
+                self.assertEqual(done.returncode, 0, done.stderr.decode("utf-8", "replace"))
+                self.assertEqual(path.read_bytes(), rewritten)
 
     def test_changed_lines_differ_only_in_their_comment_text(self) -> None:
         original = '{ name = "значение"; # старое\n  ok = true; }\n'.encode()
