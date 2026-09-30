@@ -158,6 +158,18 @@ class RewriteSourceTests(unittest.TestCase):
         self.assertEqual(result.applied, ())
         self.assertEqual(len(result.unrewritten), 1)
 
+    def test_changed_unchanged_and_failed_replies_are_counted_separately(self) -> None:
+        source = "# первый\n# второй\n# третий\n{}\n".encode()
+        generator = FakeGenerator("[[1]]\nПЕРВЫЙ\n[[2]]\nвторой\n", "")
+
+        result = rewrite_source(source, generator)
+
+        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.unchanged, (2,))
+        self.assertEqual(tuple(number for number, _ in result.unrewritten), (3,))
+        self.assertEqual(result.requests, 2)
+        self.assertEqual(code_segments(source), code_segments(result.rewritten))
+
     def test_rewrites_every_comment_and_touches_no_code(self) -> None:
         source = "# первый\n{ x = 1; }\n/* второй */\n".encode()
         generator = FakeGenerator("[[1]]\nПЕРВЫЙ\n[[2]]\nВТОРОЙ\n")
@@ -190,7 +202,8 @@ class RewriteSourceTests(unittest.TestCase):
         result = rewrite_source(source, generator)
 
         self.assertEqual(result.rewritten, "# первый\n{}\n# ВТОРОЙ\n".encode())
-        self.assertEqual(result.applied, (1, 2))
+        self.assertEqual(result.applied, (2,))
+        self.assertEqual(result.unchanged, (1,))
         self.assertEqual(result.requests, 2)
         self.assertIn("[[2]]", generator.prompts[1])
         self.assertNotIn("[[1]]", generator.prompts[1])
@@ -265,7 +278,8 @@ class RewriteSourceTests(unittest.TestCase):
 
         result = rewrite_source(source, generator)
 
-        self.assertEqual(result.applied, (1,))
+        self.assertEqual(result.applied, ())
+        self.assertEqual(result.unchanged, (1,))
         self.assertEqual(result.unrewritten, ())
 
 

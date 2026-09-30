@@ -64,13 +64,14 @@ _ATTEMPTS = 2
 
 @dataclass(frozen=True)
 class RewriteResult:
-    """What the round trip did: rewritten bytes, applied ids, failures, skips."""
+    """Changed bytes and ids, unchanged replies, failures, skips and request count."""
 
     rewritten: bytes
     applied: tuple[int, ...]
     unrewritten: tuple[tuple[int, str], ...]
     skipped: tuple[tuple[CommentSpan, str], ...]
     requests: int
+    unchanged: tuple[int, ...] = ()
 
 
 def build_request(items, *, invocation: str | None = None) -> str:
@@ -188,14 +189,21 @@ def rewrite_source(source: bytes, generate, *, invocation: str | None = None) ->
     rewrites = [
         Rewrite(candidate.span, approved[number])
         for number, candidate in numbered
-        if number in approved
+        if number in approved and approved[number] != candidate.span.text
     ]
     return RewriteResult(
         rewritten=apply_rewrites(source, rewrites),
-        applied=tuple(number for number, _ in numbered if number in approved),
+        applied=tuple(
+            number for number, candidate in numbered
+            if number in approved and approved[number] != candidate.span.text
+        ),
         unrewritten=tuple((number, reason) for number, _, reason in pending),
         skipped=selection.skipped,
         requests=requests,
+        unchanged=tuple(
+            number for number, candidate in numbered
+            if number in approved and approved[number] == candidate.span.text
+        ),
     )
 
 

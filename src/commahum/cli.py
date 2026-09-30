@@ -112,6 +112,7 @@ def run(arguments, generate=None) -> int:
     paths = collect(arguments.paths)
     totals = {
         "rewritten": 0,
+        "unchanged": 0,
         "skipped": 0,
         "kept": 0,
         "files": 0,
@@ -203,6 +204,7 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
 
         totals["files"] += 1
         totals["rewritten"] += len(result.applied)
+        totals["unchanged"] += len(result.unchanged)
         totals["skipped"] += len(result.skipped)
         totals["kept"] += len(result.unrewritten)
         totals["requests"] += result.requests
@@ -224,6 +226,7 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
 
         print(
             f"{path}: {len(result.applied)} rewritten, "
+            f"{len(result.unchanged)} unchanged, "
             f"{len(result.skipped)} skipped, {len(result.unrewritten)} kept",
             file=sys.stderr,
         )
@@ -235,6 +238,7 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
 def _totals_line(totals) -> str:
     return (
         f"{totals['files']} files, {totals['rewritten']} comments rewritten, "
+        f"{totals['unchanged']} unchanged, "
         f"{totals['skipped']} skipped, {totals['kept']} kept, "
         f"{totals['requests']} requests"
     )

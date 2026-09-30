@@ -77,6 +77,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(path.read_bytes(), "# новое\n{ x = 1; }\n".encode())
 
+    def test_an_unchanged_reply_is_reported_without_replacing_the_file(self) -> None:
+        path = self.write("home.nix", "# понятный комментарий\n{}\n")
+        inode = path.stat().st_ino
+
+        with patch("commahum.cli.os.replace") as replace:
+            code, out, err = self.run_cli(
+                ["--write", str(path)], FakeGenerator("[[1]]\nпонятный комментарий\n"),
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "")
+        self.assertIn("0 comments rewritten, 1 unchanged", err)
+        self.assertEqual(path.stat().st_ino, inode)
+        replace.assert_not_called()
+
     def test_replaces_the_file_in_one_step_and_leaves_no_debris(self) -> None:
         # A config file caught halfway through a write is worse than one that was
         # not rewritten at all, so the replacement has to be atomic — and it must

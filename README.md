@@ -154,6 +154,13 @@ test makes judgement certain. The mechanism is checked, the enforcement is
 checked, the effect is measured, and the rest is visible in the diff a human is
 meant to read.
 
+Replies returned verbatim count as `unchanged`, not `rewritten`/`applied`.
+`kept` counts comments rejected after the retry; `skipped` counts comments never
+offered to the model. This distinction is shared by rewrite, report and measure.
+New baselines record `rewrite_counts_version: 2`; older baselines must be
+re-recorded deliberately with `--save` because their `applied` included unchanged
+replies. The checked-in baseline is a historical version-1 measurement.
+
 ## Measuring the edit
 
 Removing what was already there is left to the model, so "did it work" is a
