@@ -169,6 +169,17 @@ class CliTests(unittest.TestCase):
         self.assertIn("+# ПЕРВЫЙ", out)
         self.assertIn("+# ВТОРОЙ", out)
 
+    def test_overlapping_arguments_ask_and_write_a_file_only_once(self) -> None:
+        path = self.write("home.nix", "# старое\n{}\n")
+        generator = FakeGenerator("[[1]]\nновое\n")
+
+        code, _, err = self.run_cli(["--write", str(self.root), str(path)], generator)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(generator.prompts), 1)
+        self.assertEqual(path.read_bytes(), "# новое\n{}\n".encode())
+        self.assertIn("1 files", err)
+
     def test_reports_what_it_left_alone(self) -> None:
         path = self.write("home.nix", "# текст\n# nix-shell -p hello\n{}\n")
         generator = FakeGenerator("[[1]]\nНОВЫЙ\n")
