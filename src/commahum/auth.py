@@ -240,12 +240,17 @@ def _write(path: pathlib.Path, data: dict) -> None:
 
 def _write_text(path: pathlib.Path, text: str) -> None:
     """Replace a file in one step, with the mode pi itself gives its store (0600)."""
+    _write_bytes(path, text.encode("utf-8"))
+
+
+def _write_bytes(path: pathlib.Path, data: bytes) -> None:
+    """Keep snapshots byte-for-byte, including their original line endings."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     handle, temporary = tempfile.mkstemp(prefix=".auth.json.", dir=str(path.parent))
     try:
         os.fchmod(handle, 0o600)
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(text)
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -337,25 +342,61 @@ def store(arguments, *, provider: str, checker=None) -> int:
     checker = checker or check
     key = key_from(source_text(arguments), name=arguments.from_var)
     path = store_path()
-    previous = path.read_text(encoding="utf-8") if path.is_file() else None
+    previous = path.read_bytes() if path.is_file() else None
 
     data = dict(_load(path) if previous is not None else {})
     data[provider] = {"type": "api_key", "key": key}
-    _write(path, data)
-
-    verdict = checker(provider, environment=bare_environment())
-    if verdict.get("status") != "ready":
-        if previous is None:
-            path.unlink(missing_ok=True)
-        else:
-            _write_text(path, previous)
-        raise AuthError(
-            f"pi did not confirm the key for {provider} "
-            f"({verdict.get('reason') or verdict.get('status')}); the store is back as it was"
+    written = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    try:
+        _write(path, data)
+        verdict = checker(provider, environment=bare_environment())
+        if verdict.get("status") != "ready":
+            raise AuthError(
+                f"pi did not confirm the key for {provider} "
+                f"({verdict.get('reason') or verdict.get('status')})"
+            )
+    except BaseException as error:
+        restored = _rollback_store(path, previous, written, provider, data[provider])
+        if not isinstance(error, Exception):
+            raise
+        # A transport exception can carry subprocess input, including credentials.
+        # Name its kind without printing its payload.
+        reason = str(error) if isinstance(error, AuthError) else (
+            f"pi could not verify the key for {provider} ({type(error).__name__})"
         )
+        raise AuthError(f"{reason}; {restored}") from None
 
     print(f"{provider}: the key is in {_store_mode()}, and pi confirms it; {len(key)} characters were never shown")
     return 0
+
+
+def _rollback_store(path, previous, written, provider, entry) -> str:
+    """Undo our entry without restoring a stale snapshot over a newer store.
+
+    Restore the exact snapshot when pi left it alone. If another provider changed
+    during verification, undo only our entry; a newer entry for this provider is
+    left alone too. These are guarded reads and writes, not a compare-and-swap.
+    """
+    try:
+        current = path.read_bytes()
+    except FileNotFoundError:
+        return "the store changed during verification and was left untouched"
+    if current == written:
+        if previous is None:
+            path.unlink()
+        else:
+            _write_bytes(path, previous)
+        return "the store is back as it was"
+    data = _load(path)
+    if data.get(provider) != entry:
+        return "the store changed during verification and was left untouched"
+    old = json.loads(previous) if previous and previous.strip() else {}
+    if provider in old:
+        data[provider] = old[provider]
+    else:
+        del data[provider]
+    _write(path, data)
+    return "the provider entry was rolled back; concurrent changes were kept"
 
 
 def login(arguments) -> int:

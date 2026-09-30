@@ -50,7 +50,7 @@ INSTRUCTIONS = """\
 Как отвечать:
 строка [[N]] открывает комментарий с номером N;
 текст нового комментария идёт следующей строкой и укладывается в одну строку;
-номера идут по порядку, один абзац на комментарий;
+номера идут по порядку, каждый ровно один раз, один абзац на комментарий;
 никаких пояснений, кавычек вокруг текста и блоков кода; \
 отчёт из скилла (баллы сканера, «что снято») здесь не нужен, ответ — только \
 строки [[N]] с текстом.
@@ -103,6 +103,8 @@ def parse_reply(reply: str, numbers, *, multiline=()) -> dict[int, bytes]:
     wanted = set(numbers)
     multiline = set(multiline)
     bodies: dict[int, bytes] = {}
+    seen: set[int] = set()
+    duplicates: set[int] = set()
     current: int | None = None
     buffer: list[str] = []
     for line in reply.splitlines():
@@ -110,12 +112,17 @@ def parse_reply(reply: str, numbers, *, multiline=()) -> dict[int, bytes]:
         if match:
             _store(bodies, current, buffer, wanted, multiline)
             current = int(match.group(1))
+            if current in seen:
+                duplicates.add(current)
+            seen.add(current)
             buffer = []
             continue
         if current is not None:
             buffer.append(line)
     _store(bodies, current, buffer, wanted, multiline)
-    return bodies
+    # A repeated id is ambiguous even when one section is empty, or both agree.
+    # Leave it missing so only that comment is retried; valid neighbours survive.
+    return {number: body for number, body in bodies.items() if number not in duplicates}
 
 
 def rewrite_source(source: bytes, generate, *, invocation: str | None = None) -> RewriteResult:

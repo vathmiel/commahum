@@ -26,9 +26,15 @@ def render_diff(original: bytes, rewritten: bytes, path: str) -> str:
         fromfile=f"a/{path}",
         tofile=f"b/{path}",
     )
-    return "".join(diff)
+    return "".join(
+        line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+        for line in diff
+    )
 
 
 def _lines(data: bytes) -> list[str]:
     """Decode ``data`` into newline-terminated lines without losing any byte."""
-    return data.decode("utf-8", "surrogateescape").splitlines(keepends=True)
+    # Unified diffs count LF-delimited lines. Unicode separators and bare CRs
+    # are bytes inside a line, not extra lines in a patch's hunk counts.
+    parts = data.decode("utf-8", "surrogateescape").split("\n")
+    return [part + "\n" for part in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
