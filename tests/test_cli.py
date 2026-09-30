@@ -205,6 +205,48 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("absent.nix", err)
 
+    def test_an_unreadable_file_is_reported_and_the_next_file_is_rewritten(self) -> None:
+        unreadable = self.write("a.nix", "# старое\n{}\n")
+        later = self.write("b.nix", "# старое\n{}\n")
+        read_bytes = Path.read_bytes
+        generator = FakeGenerator("[[1]]\nновое\n")
+
+        def read(path):
+            if path == unreadable:
+                raise PermissionError("cannot read")
+            return read_bytes(path)
+
+        with patch.object(Path, "read_bytes", read):
+            code, _, err = self.run_cli(["--write", str(unreadable), str(later)], generator)
+
+        self.assertEqual(code, 1)
+        self.assertIn(f"{unreadable}: PermissionError", err)
+        self.assertEqual(unreadable.read_bytes(), "# старое\n{}\n".encode())
+        self.assertEqual(later.read_bytes(), "# новое\n{}\n".encode())
+        self.assertEqual(len(generator.prompts), 1)
+
+    def test_a_failed_replace_is_reported_and_cleans_up_before_the_next_file(self) -> None:
+        unwritable = self.write("a.nix", "# старое\n{}\n")
+        later = self.write("b.nix", "# старое\n{}\n")
+        replace = os.replace
+
+        def move(source, target):
+            if target == unwritable:
+                raise PermissionError("cannot replace")
+            return replace(source, target)
+
+        with patch("commahum.cli.os.replace", move):
+            code, _, err = self.run_cli(
+                ["--write", str(unwritable), str(later)],
+                FakeGenerator("[[1]]\nновое\n", "[[1]]\nновое\n"),
+            )
+
+        self.assertEqual(code, 1)
+        self.assertIn(f"{unwritable}: PermissionError", err)
+        self.assertEqual(unwritable.read_bytes(), "# старое\n{}\n".encode())
+        self.assertEqual(later.read_bytes(), "# новое\n{}\n".encode())
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["a.nix", "b.nix"])
+
     def test_reports_comments_the_model_did_not_return(self) -> None:
         path = self.write("home.nix", "# текст\n{}\n")
         generator = FakeGenerator("", "")

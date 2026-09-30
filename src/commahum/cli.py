@@ -182,11 +182,16 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
         if arguments.write:
             try:
                 _writable_stat(path)
-            except UnsafeFileError as error:
+            except (UnsafeFileError, OSError) as error:
                 print(f"{path}: {error}, not written", file=sys.stderr)
                 failed = True
                 continue
-        source = path.read_bytes()
+        try:
+            source = path.read_bytes()
+        except OSError as error:
+            print(f"{path}: {type(error).__name__}: {error}", file=sys.stderr)
+            failed = True
+            continue
         if not arguments.quiet:
             print(f"{display_name(path)}: {_progress_note(generate)}", file=sys.stderr)
         try:
@@ -210,6 +215,9 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
                 _write_atomically(path, result.rewritten, expected=source)
             except (StaleFileError, UnsafeFileError) as stale:
                 print(f"{path}: {stale}, not written", file=sys.stderr)
+                failed = True
+            except OSError as error:
+                print(f"{path}: {type(error).__name__}: {error}, not written", file=sys.stderr)
                 failed = True
             else:
                 totals["written"] += 1
