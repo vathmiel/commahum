@@ -179,7 +179,19 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
             print(f"{path}: no such file", file=sys.stderr)
             failed = True
             continue
-        source = path.read_bytes()
+        if arguments.write:
+            try:
+                _writable_stat(path)
+            except (UnsafeFileError, OSError) as error:
+                print(f"{path}: {error}, not written", file=sys.stderr)
+                failed = True
+                continue
+        try:
+            source = path.read_bytes()
+        except OSError as error:
+            print(f"{path}: {type(error).__name__}: {error}", file=sys.stderr)
+            failed = True
+            continue
         if not arguments.quiet:
             print(f"{display_name(path)}: {_progress_note(generate)}", file=sys.stderr)
         try:
@@ -201,8 +213,11 @@ def _rewrite_all(paths, arguments, generate, totals, *, invocation: str) -> bool
         if arguments.write and result.rewritten != source:
             try:
                 _write_atomically(path, result.rewritten, expected=source)
-            except StaleFileError as stale:
+            except (StaleFileError, UnsafeFileError) as stale:
                 print(f"{path}: {stale}, not written", file=sys.stderr)
+                failed = True
+            except OSError as error:
+                print(f"{path}: {type(error).__name__}: {error}, not written", file=sys.stderr)
                 failed = True
             else:
                 totals["written"] += 1
@@ -240,6 +255,21 @@ class StaleFileError(Exception):
     """The file on disk is no longer the one the rewrite was computed from."""
 
 
+class UnsafeFileError(Exception):
+    """Atomic replacement would break a link or replace a non-regular file."""
+
+
+def _writable_stat(path):
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        raise UnsafeFileError("refusing to replace a symbolic link; name its target directly")
+    if not stat.S_ISREG(info.st_mode):
+        raise UnsafeFileError("refusing to replace a non-regular file")
+    if info.st_nlink > 1:
+        raise UnsafeFileError("refusing to split a hard-linked file")
+    return info
+
+
 def _write_atomically(path, data: bytes, *, expected: bytes) -> None:
     """Replace ``path`` with ``data`` in one step, keeping its mode.
 
@@ -260,7 +290,8 @@ def _write_atomically(path, data: bytes, *, expected: bytes) -> None:
     buys is the wide window, the model request, where a save is likely to land.
     """
     try:
-        mode = stat.S_IMODE(path.stat().st_mode)
+        original = _writable_stat(path)
+        mode = stat.S_IMODE(original.st_mode)
     except OSError:
         raise StaleFileError("gone since it was read") from None
     handle, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -272,10 +303,13 @@ def _write_atomically(path, data: bytes, *, expected: bytes) -> None:
             os.fsync(stream.fileno())
         try:
             current = path.read_bytes()
+            latest = _writable_stat(path)
         except OSError:
             raise StaleFileError("gone since it was read") from None
         if current != expected:
             raise StaleFileError("changed since it was read")
+        if (latest.st_dev, latest.st_ino) != (original.st_dev, original.st_ino):
+            raise StaleFileError("replaced since the write was prepared")
         os.replace(temp_name, path)
     except BaseException:
         # BaseException, not Exception: an interrupt landing between the temporary
