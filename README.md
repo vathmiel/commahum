@@ -409,6 +409,11 @@ last read and `os.replace`; it is not an atomic compare-and-swap. A run that
 cannot start at all — no node, no pi — is 2, with a sentence rather than a
 traceback.
 
+`--write` refuses symbolic links and files with multiple hard links, before asking
+the model and again before replacement. A preview can still read a symbolic link;
+to write it, name the regular target directly. Refusals do not stop later files
+and make the run exit 1.
+
 ```sh
 $ commahum --provider deepseek /etc/nixos/modules
 modules/home/cli/fish.nix: asking pi · deepseek/deepseek-flash · humanizer-ru
